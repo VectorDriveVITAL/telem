@@ -1,21 +1,20 @@
 # telem — coastal buoy & service telemetry dashboard
 
-A real backend for the telem dashboard: InfluxDB for storage, a FastAPI
-service that runs a live mock-data simulator and serves it over a small
-REST API, and the dashboard itself served straight off the API so there's
-nothing to configure — one process, one URL.
+A FastAPI dashboard for buoy telemetry and service health, with real or simulated
+readings in InfluxDB and durable fleet operations in SQLite. The API serves the
+frontend directly; no frontend build is required.
 
-The simulator isn't a scripted replay. Each service and buoy metric does a
-bounded random walk in InfluxDB, and alerts/incidents are derived
-server-side from real threshold crossings on that data. Restart it and
-you'll get a different (but similarly-shaped) story each time.
+Version 0.2 adds a fleet overview, per-probe rules and freshness, persistent
+incident actions, multi-metric analysis, maintenance logs and working CSV
+exports. Existing routes and the legacy single-metric history response remain
+available. Demo data is seeded only when the operational database is empty.
 
 ## Stack
 
-- **Storage:** InfluxDB 2.7
-- **API:** Python + FastAPI (see the "why Python" note below)
-- **Frontend:** the existing single-file dashboard, now fetching from the
-  API instead of generating mock data client-side
+- **Samples:** InfluxDB 2.7
+- **Operational state:** SQLite (Python standard library)
+- **API:** Python + FastAPI
+- **Frontend:** HTML, CSS and vanilla JavaScript; bundled Leaflet 1.9.4
 
 ## Quick start
 
@@ -246,6 +245,8 @@ the standard local setup.
 | `TICK_SECONDS` | `3` | how often the simulator writes a new point per series |
 | `HISTORY_MINUTES` | `240` | how much synthetic history to backfill on first boot |
 | `CORS_ORIGINS` | `*` | only matters if you serve the dashboard from somewhere else |
+| `STATE_DB` | `.telem/state.sqlite3` | durable registrations, current state, rules, incidents, notes, maintenance and mutes |
+| `SEED_DEMO` | `true` | seed demo sources on the first run; set `false` for an empty fleet |
 
 ## Project layout
 
@@ -254,13 +255,18 @@ app/
   main.py            FastAPI app, CORS, startup/shutdown, serves the dashboard at "/"
   config.py          env-var settings
   seed_data.py        the mock fleet's definition - edit this to add/change services & buoys
-  generator.py        the simulator: random walks, thresholds, alerts, incidents
+  generator.py        durable fleet controller, simulator, thresholds and operations
+  state_store.py       SQLite snapshots, separate from InfluxDB samples
   influx_client.py     thin wrapper around the InfluxDB client (writes + Flux reads)
   models.py           Pydantic response models
   routers/
-    services.py, buoys.py, alerts.py, incidents.py
+    services.py, buoys.py, alerts.py, incidents.py, ingest.py, operations.py
 frontend/
-  telemetry-dashboard.html   the dashboard - fetches from the API below
+  telemetry-dashboard.html   dashboard markup
+  dashboard.js               interaction state and timestamp-based SVG charts
+  operations.css             responsive operation views and dialogs
+  vendor/leaflet/             bundled map library and license
+tests/                       unit, real-database and browser workflows
 docker-compose.yml    InfluxDB, auto-initialized
 requirements.txt
 .env.example
@@ -283,7 +289,8 @@ once the server's running. Summary:
 | `GET /api/incidents` | alerts grouped into incidents, with open/resolved state |
 | `GET /api/health` | uptime check |
 
-The dashboard polls the first six of these every 4 seconds. The demo fleet
+The dashboard refreshes fleet state and the visible chart every 4 seconds after
+the previous refresh completes. The demo fleet
 (6 services, 6 buoys with `temp`/`salinity`/`turbidity`/`ph`) is just what's
 registered on first boot - none of it is hardcoded beyond that.
 
@@ -311,13 +318,17 @@ sensors on real hardware and others still simulated at the same time.
 |---|---|---|
 | `POST /api/ingest/services/{name}` | any subset of `{"latency_ms", "rps", "error_rate", "time"?}` | 404 if not registered. `time` optional, defaults to now. |
 | `POST /api/ingest/services/{name}/batch` | array of the above | For backfill or batched uplink. |
-| `POST /api/ingest/buoys/{id}` | any subset of `{"battery", "lat", "lng", "satellites", "signal_dbm", "time"?}` **plus any sensor names you want**, e.g. `{"temp": 18.4, "turbidity": 3.1}` | **A field name that isn't a recognized sensor yet is auto-registered on that buoy** - you don't need to call `POST /api/buoys/{id}/sensors` first. It shows up with no unit unless you'd already registered it with one, and it appears as its own tab on the dashboard immediately. |
+| `POST /api/ingest/buoys/{id}` | any subset of `{"battery", "lat", "lng", "satellites", "signal_dbm", "solar_watts", "time"?}` **plus any sensor names you want**, e.g. `{"temp": 18.4, "turbidity": 3.1}` | **A field name that isn't a recognized sensor yet is auto-registered on that buoy** - you don't need to call `POST /api/buoys/{id}/sensors` first. It shows up with no unit unless you'd already registered it with one, and it appears as its own tab on the dashboard immediately. |
 | `POST /api/ingest/buoys/{id}/batch` | array of the above | |
 | `POST /api/ingest/buoys/{id}/heartbeat` | `{"signal_dbm"?}` | Updates last-contact only, doesn't touch sensor data. |
 
-There's no validation on ingested values (no range checking, no auth) -
-this is a local dev tool, not a public-facing ingest pipeline. Add both
-before this ever faces a network you don't trust.
+Numeric fields must be finite. Battery is constrained to 0–100, coordinates to
+valid latitude/longitude ranges, and error rate to 0–100%. Invalid timestamps
+are rejected; timezone-free timestamps are interpreted as UTC. Sensor values
+remain unrestricted by alert limits: an out-of-range reading is recorded and
+can trigger an incident. Null sensor fields are ignored for compatibility.
+Batches accept 1–1,000 readings. Source and sensor names use letters, numbers,
+dots, underscores and hyphens (maximum 80 characters).
 
 **"Stopping simulation" isn't a separate action** - sending real data for a
 field is what stops it being simulated, immediately, the moment the first
@@ -344,72 +355,185 @@ python3 scripts/feed_sensor_example.py --buoy buoy-01 --interval 5
 | `POST /api/services/{name}/simulate` | - | Flips a service back to simulated, picking up its random walk from the current value. |
 | `POST /api/buoys/{id}/simulate` | `{"sensor"?}` | With `sensor` given, flips just that one field back (`"battery"`, `"position"`, or a sensor name). Omitted → resets the whole buoy to simulated. |
 
-One rough edge worth knowing: flipping a sensor back to simulated resumes
-the random walk from whatever internal baseline it was assigned (0 for an
-auto-registered sensor with no prior config) rather than from the last
-real value - so you may see a jump on the chart right after resuming. Given
-there's no validation layer, smoothing that over wasn't worth the
-complexity yet.
+Simulation resumes from the current reading and moves toward its configured
+baseline. Real sensor fields are never rewritten by simulator ticks. Resuming
+the entire buoy also resumes simulated contact; resuming one sensor does not.
 
-## Why Python/FastAPI over TypeScript
+## Using the new dashboard
 
-InfluxDB's Python client is more mature than the JS one, FastAPI gives you
-the `/docs` page above for free (genuinely useful while you're deciding
-what a mock endpoint should return), and Pydantic models map cleanly onto
-"a buoy reading" without much ceremony. The frontend is still a single
-vanilla-JS file rather than a TS build, so TypeScript's main advantage —
-sharing types between frontend and backend — doesn't apply here. If you
-rebuild the frontend in TS at some point, that calculus changes.
+- **Overview:** click an attention card to filter the relevant service, buoy or
+  incident view. Rising latency means the latest change exceeds both 5 ms and
+  5% of the current value. Offline and low-battery cards use the same rules as
+  the source status shown elsewhere.
+- **Sensor telemetry:** select a buoy to open its drawer. Add a probe, edit each
+  probe's warning/critical limits, set its freshness deadline, or log maintenance.
+  Settings controls the buoy's contact deadline and its individual mooring point.
+- **Incidents:** expand a card to acknowledge it, assign an owner, edit the
+  investigated cause, add notes, resolve it, or reopen it. Changes survive
+  refresh and restart. Manual resolution does not change sensor health: the
+  same unchanged condition stays resolved until a subsequent condition change.
+  Only one incident per source can be ongoing at a time; older incidents remain.
+- **Event feeds:** Ack is stored on the server. Mute is an expiring, shared
+  source mute (default 60 minutes); incidents continue recording while muted.
+- **Analysis:** select a buoy and any mix of probes, battery, solar, signal or
+  position channels. Each metric is scaled to 0–100% by default; the legend and
+  tooltip retain actual units and values. Shared numeric scale is also available.
+  Gaps remain gaps; missing channels are not forward-filled.
+- **Charts:** hover for recorded timestamps, use the wheel or +/- to zoom, drag
+  to select a time window, or use the replay slider to move through recent
+  history. Reset/Return to live restores the rolling window. Alert tracing
+  opens the 30-minute window around the event. Dashed maintenance markers are
+  shared with Analysis. Comparisons require matching metrics and units.
+- **CSV:** choose raw samples or mean/min/max/last aggregation. Exports use the
+  selected chart window, including zoom/replay; the dialog lets you adjust it.
+  Incident export includes ownership, notes and event history.
+- **Search:** Cmd+K or Ctrl+K finds all currently registered sources, including
+  ones created after page load. Theme preference persists in the browser.
 
-## Known gaps
+The Throughput and battery sparklines use recorded data. Error budget and HTTP
+status-code cards explicitly show **Not reported** because the existing service
+ingest contract does not provide the observations needed to calculate them.
 
-Being upfront about what's still cosmetic rather than wired to real data:
+## Operations API
 
-- The three small stat cards on the Service health tab — **Throughput**,
-  **Error budget**, and **Status codes (5m)** — are still the original
-  static mock numbers. The backend doesn't currently track a request-rate
-  history, an SLO/error-budget calculation, or an HTTP-status-code
-  breakdown, so there was nothing real to wire them to yet. Everything
-  else on both tabs (sidebar, table, chart, alerts, incidents, drawer,
-  map, compare mode) is live.
-- The "Mooring drift" panel (the abstract schematic plot, not the real
-  map) keeps its original stylized layout positions and only updates each
-  buoy's status color live — the positions themselves were never meant to
-  be literal geometry, that's what the real map is for. Newly-registered
-  buoys don't get a position on this specific plot (they still show up
-  everywhere else — sidebar, table, real map, drawer).
-- No auth, no validation on ingested values (no range checking, no type
-  strictness beyond "is it a number"). Fine for local dev; add both before
-  this ever faces a network you don't trust.
-- Buoy status (healthy/warning/critical) only reacts to battery level and
-  the original four known metrics (turbidity/pH fault thresholds). A
-  custom sensor added via registration or ingest is plotted and shown
-  everywhere, but never drives an alert or incident on its own — there's
-  no notion of a "normal range" for an arbitrary field name without
-  validation.
-- Resuming simulation on a sensor after real data stops (`POST
-  /api/buoys/{id}/simulate`) picks up from an internal baseline, not the
-  last real value — expect a visible jump on the chart right after.
-- `docker-compose.yml` only runs InfluxDB, not the API — that's
-  intentional for now, since `uvicorn --reload` during development is
-  more convenient than rebuilding a container on every change. Add a
-  second service to the compose file if you'd rather run everything in
-  containers.
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/overview` | Fleet counts, rising service names and prioritized sources |
+| `GET/PUT /api/buoys/{id}/sensors/{sensor}/rules` | Per-probe value and freshness rules |
+| `PUT /api/buoys/{id}/settings` | Contact deadline and mooring coordinates |
+| `GET /api/incidents/{id}` | One complete incident |
+| `PATCH /api/incidents/{id}` | `owner`, `cause`, `acknowledged`, `status` (`ongoing` or `resolved`) |
+| `POST /api/incidents/{id}/notes` | `text` and optional `author` |
+| `PATCH /api/alerts/{id}` | `{"acknowledged": true}` |
+| `GET/POST /api/mutes` | List active mutes / mute a source for a duration |
+| `DELETE /api/mutes/{id}` | Remove a source mute |
+| `GET/POST /api/buoys/{id}/maintenance` | List or record work performed |
+| `GET /api/export` | Raw or aggregated readings, or incident history, as CSV |
+
+Example rule body (PUT replaces the complete rule):
+
+```json
+{
+  "enabled": true,
+  "warn_min": 5,
+  "warn_max": null,
+  "crit_min": 3,
+  "crit_max": null,
+  "stale_after_seconds": 300
+}
+```
+
+Limits trigger when a value is strictly outside the configured range. Disabling
+rules suppresses both value and freshness alerts for that probe, while the UI
+continues showing whether its measurement is stale. Battery at or below 15% is
+critical. Buoys become offline after their contact deadline (default 300 seconds).
+Once any real ingest or heartbeat arrives, remaining simulated fields cannot
+refresh that device's contact time. A heartbeat cannot refresh a probe's reading.
+
+Maintenance accepts `kind` (`deployment`, `calibration`, `probe_swap`,
+`battery_replacement`, `site_visit`, `other`), `description`, `operator`, optional
+`sensor`, and optional ISO `time`. It is an activity log; a calibration entry
+does not retroactively modify measurement values.
+
+### History queries and exports
+
+Existing single-metric calls still return `[{"time": "...", "value": 1.2}]`.
+Specify `metrics` to receive a shared timeline with nulls for missing channels:
+
+```text
+GET /api/buoys/buoy-01/timeseries?metrics=temp,battery,solar_watts,signal_dbm&minutes=60
+GET /api/services/telemetry-gateway/timeseries?metrics=latency_ms,rps,error_rate&minutes=60
+```
+
+```json
+{
+  "start": "2026-09-15T12:00:00+00:00",
+  "end": "2026-09-15T13:00:00+00:00",
+  "metrics": ["temp", "battery"],
+  "aggregation": "mean",
+  "interval_seconds": 15,
+  "points": [{"time": "2026-09-15T12:00:00+00:00", "values": {"temp": 22, "battery": null}}]
+}
+```
+
+History parameters: `start`, `end` (ISO timestamps), `minutes` (default 60),
+`aggregation` (`raw`, `mean`, `min`, `max`, `last`), and `interval_seconds`.
+Explicit timestamps take precedence over `minutes`. Multi-metric history
+selects approximately 240 buckets by default; legacy calls retain approximately
+60 buckets. Aggregated timestamps mark bucket starts, not arrival times.
+Service latency is whatever latency statistic the producer submits; the API
+averages that reported statistic per bucket rather than computing request p95.
+
+Exports use these same time and aggregation parameters with `kind=buoy|service`,
+`source=<id>` and optional comma-separated `metrics`. Use `kind=incidents` for
+incidents started in the selected window. The end time is exclusive. Requests
+are limited to 31 days and 20,000 returned metric values; overly large results
+return HTTP 413 without silently truncating. Sensor rules and validation errors
+return 400/422; unavailable telemetry storage returns 503.
+
+Real readings include sensor metadata and measurement timestamps in current
+state. Late batches are written to history, but an older real measurement does
+not replace a newer real current value. InfluxDB writes use nanosecond timestamp
+precision. New samples are tagged as real or simulated; pre-upgrade samples
+remain readable without that tag.
+
+## Persistence and running the app
+
+Run **one Uvicorn worker**. The controller serializes mutations and snapshots
+operational state into `STATE_DB`. Multiple worker processes would each own a
+separate in-memory controller and must not share this state file. InfluxDB
+continues to store the actual time series. SQLite is included with Python;
+there is no additional database service to install.
+
+The first upgrade starts operational state from the demo definitions unless
+`SEED_DEMO=false`. Older releases kept registrations/incidents only in memory,
+so there is no prior durable registry to migrate. Existing InfluxDB history is
+retained. Subsequent restarts restore the fleet instead of reseeding it, even
+when all sources have been deleted. Back up both InfluxDB and the state database
+while the API is stopped. Runtime data, environments and credentials are ignored
+by Git.
+
+SQLite and InfluxDB do not share a distributed transaction. Invalid batches are
+rejected before ingestion; if storage fails midway through a valid batch, some
+historical writes may have succeeded. Retry using the same measurement timestamps.
+Current operational state rolls back on a failed mutation. This remains a local
+or trusted-network development dashboard with no user authentication.
+
+Map tiles and optional web fonts need internet access. The Leaflet library is
+bundled locally, and the rest of the dashboard can run without those services.
+
+## Validation
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The ordinary suite uses temporary SQLite databases and substitutes the InfluxDB
+writer. To exercise real Flux queries and CSV exports, start the development
+app and run:
+
+```bash
+TELEM_TEST_URL=http://127.0.0.1:8000 python -m pytest tests/test_live.py -q
+```
+
+For browser workflows:
+
+```bash
+npm ci
+npx playwright install chromium
+TELEM_TEST_URL=http://127.0.0.1:8000 npm run test:browser
+```
+
+These integration/browser checks create uniquely named test sources, then
+remove them. Their historical samples and incident records remain in the test
+instance. Use a development instance. Browser screenshots and CSVs are written
+to ignored `test-results/`. `CHROMIUM_EXECUTABLE` optionally selects an existing
+Chromium binary.
 
 ## Extending it
 
-The fleet isn't a fixed list anymore — `app/seed_data.py` only defines
-what's registered on first boot. Add a service or buoy at runtime with
-`POST /api/services` / `POST /api/buoys` (see the API section above), or
-just start sending `POST /api/ingest/buoys/{id}` with a field name that
-doesn't exist yet and it registers itself. Both paths show up on the
-dashboard immediately — new sidebar entry, new table row, and for buoys,
-a metric tab per sensor, built from whatever that buoy actually reports
-rather than a hardcoded list.
-
-If you want a brand-new sensor to render nicely instead of falling back to
-an auto-scaled y-axis, add it to `KNOWN_METRIC_DISPLAY` in the dashboard's
-`<script>` with a fixed `min`/`max`/`decimals` — that's the one place a
-"nice known range" is hardcoded client-side; everything else about a
-custom sensor works without it.
-
+`app/seed_data.py` defines only the first-run demo. Register sources and probes
+through the API or dashboard, supply a display unit, and configure sensor rules.
+The sidebar, map, command palette, chart selectors and Analysis discover them
+from the API; no client-side sensor list needs editing.

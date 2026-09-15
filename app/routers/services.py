@@ -1,8 +1,11 @@
+from datetime import datetime
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Path, Query
 
 from .. import generator
-from ..influx_client import query_timeseries
-from ..models import ServiceStatus, TimeseriesPoint, ServiceCreate
+from ..influx_client import query_history, query_timeseries
+from ..models import ServiceCreate, ServiceStatus
 
 router = APIRouter(prefix="/api/services", tags=["services"])
 
@@ -10,11 +13,16 @@ router = APIRouter(prefix="/api/services", tags=["services"])
 def _to_status(state: dict) -> ServiceStatus:
     return ServiceStatus(
         name=state["name"],
-        status=state["status"],
+        status=generator._service_health(state)[0],
         latency_ms=round(state["latency"], 1),
         rps=round(state["rps"]),
         error_rate=round(state["error_rate"], 3),
         simulated=state["simulated"],
+        last_reading_at=state.get("last_reading_at"),
+        stale=generator._age(state.get("last_reading_at")) > 300,
+        warn_ms=state["warn_ms"],
+        crit_ms=state["crit_ms"],
+        latency_delta_ms=state.get("latency_delta_ms", 0),
     )
 
 
@@ -24,7 +32,9 @@ def list_services():
     return [_to_status(s) for s in generator.get_all_service_states().values()]
 
 
-@router.post("", response_model=ServiceStatus, status_code=201, summary="Register a new service")
+@router.post(
+    "", response_model=ServiceStatus, status_code=201, summary="Register a new service"
+)
 def create_service(body: ServiceCreate):
     """Adds a new service to the fleet, starting out simulated. 409 if the name is already taken."""
     try:
@@ -43,7 +53,11 @@ def delete_service(name: str = Path(..., examples=["calibration-worker"])):
         raise HTTPException(404, f"unknown service: {name}")
 
 
-@router.post("/{name}/simulate", response_model=ServiceStatus, summary="Resume simulating a service")
+@router.post(
+    "/{name}/simulate",
+    response_model=ServiceStatus,
+    summary="Resume simulating a service",
+)
 def resume_simulation(name: str = Path(..., examples=["calibration-worker"])):
     """Flips a service back to simulated, picking up its random walk from the current value."""
     try:
@@ -53,13 +67,34 @@ def resume_simulation(name: str = Path(..., examples=["calibration-worker"])):
     return _to_status(state)
 
 
-@router.get("/{name}/timeseries", response_model=list[TimeseriesPoint], summary="Get a service's latency history")
+@router.get(
+    "/{name}/timeseries",
+    summary="Service history; legacy latency array or aligned metrics",
+)
 def service_timeseries(
-    name: str = Path(..., examples=["telemetry-gateway"]),
-    minutes: int = Query(60, description="How far back to look, in minutes (5-1440)."),
+    name: str,
+    minutes: int = Query(60, ge=5, le=44640),
+    metric: str = "latency_ms",
+    metrics: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    aggregation: Literal["raw", "mean", "min", "max", "last"] = "mean",
+    interval_seconds: int | None = Query(None, ge=1, le=86400),
 ):
-    """p95 latency over time, aggregated to ~60 points regardless of the window size."""
     if not generator.get_service_state(name):
-        raise HTTPException(404, f"unknown service: {name}")
-    minutes = max(5, min(minutes, 1440))
-    return query_timeseries("service_metrics", "service", name, "latency_ms", minutes)
+        raise HTTPException(404, "unknown service")
+    fields = list(dict.fromkeys(metrics.split(","))) if metrics else [metric]
+    if not fields or any(f not in {"latency_ms", "rps", "error_rate"} for f in fields):
+        raise HTTPException(400, "unknown service metric")
+    query = query_history if metrics else query_timeseries
+    return query(
+        "service_metrics",
+        "service",
+        name,
+        fields if metrics else metric,
+        minutes,
+        start,
+        end,
+        aggregation,
+        interval_seconds,
+    )

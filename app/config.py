@@ -28,6 +28,8 @@ class Settings:
     history_minutes: int = int(os.getenv("HISTORY_MINUTES", "240"))
 
     cors_origins: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
+    state_db: str = os.getenv("STATE_DB", ".telem/state.sqlite3")
+    seed_demo: bool = os.getenv("SEED_DEMO", "true").lower() == "true"
 
 
 settings = Settings()

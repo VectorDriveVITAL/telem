@@ -29,3 +29,9 @@ __pycache__/
 *.njsproj
 *.sln
 *.swp
+
+# Persistent operational state and local verification artifacts
+.telem/
+.pytest_cache/
+node_modules/
+test-results/

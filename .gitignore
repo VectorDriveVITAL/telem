@@ -3,6 +3,16 @@
 venv/
 ENV/
 
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS generated files
+.DS_Store
+.AppleDouble
+.LSOverride
+
 # InfluxDB runtime files
 .influxd-data/
 .influxd.log
@@ -19,13 +29,3 @@ ENV/
 *.njsproj
 *.sln
 *.swp
-
-# Python generated files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# macOS generated files
-.DS_Store
-.AppleDouble
-.LSOverride

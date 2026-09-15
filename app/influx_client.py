@@ -7,13 +7,14 @@ one place and makes it straightforward to swap storage later if you ever
 need to (e.g. moving to InfluxDB Cloud, or a different bucket layout).
 """
 from datetime import datetime, timezone
+from typing import Optional
 
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from .config import settings
 
-_client: InfluxDBClient | None = None
+_client: Optional[InfluxDBClient] = None
 
 
 def get_client() -> InfluxDBClient:
@@ -41,7 +42,7 @@ def write_points(points: list[Point]):
     write_api.write(bucket=settings.influx_bucket, org=settings.influx_org, record=points)
 
 
-def make_point(measurement: str, tags: dict, fields: dict, time: datetime | None = None) -> Point:
+def make_point(measurement: str, tags: dict, fields: dict, time: Optional[datetime] = None) -> Point:
     p = Point(measurement)
     for k, v in tags.items():
         p = p.tag(k, v)
@@ -52,7 +53,7 @@ def make_point(measurement: str, tags: dict, fields: dict, time: datetime | None
     return p
 
 
-def query_latest(measurement: str, tag_key: str, tag_value: str) -> dict | None:
+def query_latest(measurement: str, tag_key: str, tag_value: str) -> Optional[dict]:
     """Return the most recent field values for one series, as a plain dict,
     or None if nothing has been written yet."""
     flux = f'''

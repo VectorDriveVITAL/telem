@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,10 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .generator import seed_history, background_loop, seconds_since_start
 from .influx_client import close_client
-from .routers import services, buoys, alerts, incidents
+from .routers import services, buoys, alerts, incidents, ingest
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-_bg_task: asyncio.Task | None = None
+_bg_task: Optional[asyncio.Task] = None
 
 
 @asynccontextmanager
@@ -29,7 +30,19 @@ async def lifespan(app: FastAPI):
     close_client()
 
 
-app = FastAPI(title="telem API", lifespan=lifespan)
+app = FastAPI(
+    title="telem API",
+    description=(
+        "Backend for the telem coastal buoy / service telemetry dashboard. "
+        "Serves live (simulated + real) fleet data out of InfluxDB, and "
+        "accepts real readings via the ingest endpoints below - anything "
+        "you POST there takes over from the simulator for that field.\n\n"
+        "The dashboard itself is served at [`/`](/) - this page is just for "
+        "poking at the API directly."
+    ),
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,10 +55,12 @@ app.include_router(services.router)
 app.include_router(buoys.router)
 app.include_router(alerts.router)
 app.include_router(incidents.router)
+app.include_router(ingest.router)
 
 
-@app.get("/api/health")
+@app.get("/api/health", summary="Health check", tags=["meta"])
 def health():
+    """Basic liveness/uptime check - doesn't touch InfluxDB."""
     return {"status": "ok", "uptime_seconds": round(seconds_since_start(), 1)}
 
 

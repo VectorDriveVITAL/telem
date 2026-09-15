@@ -1,8 +1,7 @@
 """
-Static definitions of the mock fleet: which services and buoys exist, and the
-baseline characteristics the data generator uses as a starting point for each
-one's random walk. This is the one file you'd edit to change what the demo
-"fleet" looks like — add a service, add a buoy, change a threshold.
+Initial fleet definitions - what the simulator boots with. Registration
+endpoints (POST /api/services, POST /api/buoys, POST /api/buoys/{id}/sensors)
+let you add more at runtime; this file only seeds what's there on first boot.
 """
 
 # Each service gets one time series: p95 latency in milliseconds.
@@ -66,9 +65,15 @@ SERVICES = [
     },
 ]
 
-# Each buoy reports four sensor channels plus battery. lat/lng are real
-# coordinates off the Virginia coast (Chesapeake Bay mouth) purely for the
-# map — swap these for wherever your actual deployment is.
+# Units for the four water-quality sensors every default buoy starts with.
+# Sensors added later via POST /api/buoys/{id}/sensors carry whatever unit
+# (if any) is given at registration time; ones auto-created because real
+# ingested data showed up for an unrecognized field name get no unit at all,
+# since there was nowhere for one to come from.
+DEFAULT_UNITS = {"temp": "°C", "salinity": "psu", "turbidity": "NTU", "ph": ""}
+
+# lat/lng are real coordinates off the Virginia coast (Chesapeake Bay mouth)
+# purely for the map — swap these for wherever your actual deployment is.
 BUOYS = [
     {
         "id": "buoy-01",
@@ -111,7 +116,6 @@ BUOYS = [
         "volatility": {"temp": 0.4, "salinity": 0.15, "turbidity": 0.3, "ph": 0.03},
         "base_battery": 55,
         "solar_watts": 2.9,
-        "gnss_degraded": True,  # reports a stale/no-fix GNSS state
     },
     {
         "id": "buoy-06",
@@ -129,3 +133,11 @@ METRIC_RANGES = {
     "turbidity": (0, 15),
     "ph": (6.5, 8.5),
 }
+
+# Fallback simulation parameters for a sensor added via registration with no
+# real data yet and no known range (i.e. anything outside METRIC_RANGES).
+# Deliberately bland - a registered-but-empty custom sensor just idles near
+# zero until either real ingest data arrives or you don't care what it shows.
+GENERIC_SENSOR_BASE = 0.0
+GENERIC_SENSOR_VOLATILITY = 1.0
+

@@ -1,41 +1,43 @@
 """
-Drives the whole mock fleet.
+Drives the whole fleet - services and buoys, whether they're part of the
+built-in demo set or registered/ingested at runtime.
 
-This is deliberately NOT a script that plays back a fixed, scripted story —
-it's a live simulation. Each service/buoy metric does a bounded random walk
-(mean-reverting, so it wanders but doesn't drift off to infinity), gets
-written to InfluxDB on every tick, and alerts/incidents are derived
-server-side from real threshold crossings on that data — an alert fires when
-a metric actually crosses into warning/critical, and resolves when it comes
-back down. Restart the server and you'll get a different (but similarly
-shaped) story each time, the same way a real fleet would never replay
-identically.
+Each service's latency and each buoy's individual sensors/battery/position
+carry their own "simulated" flag. While a field is simulated, the tick loop
+does a bounded random walk and writes it to InfluxDB. The moment real data
+is POSTed for that field via /api/ingest/..., that flag flips off and the
+simulator leaves it alone from then on - real and fake data coexist on the
+same fleet, down to individual sensors on the same buoy, without fighting
+each other. POST .../simulate flips a field back to fake.
+
+Alerts and incidents are derived from real threshold crossings on whichever
+data is live for a field, real or simulated - the logic doesn't care which.
 """
 import asyncio
 import random
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from .config import settings
 from .influx_client import make_point, write_points, utcnow
-from .seed_data import SERVICES, BUOYS, METRIC_RANGES
+from .seed_data import (
+    SERVICES, BUOYS, METRIC_RANGES, DEFAULT_UNITS,
+    GENERIC_SENSOR_BASE, GENERIC_SENSOR_VOLATILITY,
+)
 
 MOORING_LAT = sum(b["lat"] for b in BUOYS) / len(BUOYS)
 MOORING_LNG = sum(b["lng"] for b in BUOYS) / len(BUOYS)
 
-# ---------------------------------------------------------------- in-memory state
-# InfluxDB is the source of truth for the time-series values themselves;
-# this in-memory state is just what the generator needs to step the random
-# walk forward each tick, plus the derived alert/incident feed (which is
-# event-driven and doesn't really belong in a time-series bucket).
-
-_service_state: dict[str, dict] = {}
-_buoy_state: dict[str, dict] = {}
+# ---------------------------------------------------------------- registries
+_services: dict[str, dict] = {}
+_buoys: dict[str, dict] = {}
 _alerts: list[dict] = []
-_incidents: dict[str, dict] = {}   # keyed by source name, only one *open* incident per source
-_incident_counter = 10             # first generated incident is INC-011, so it reads naturally
-                                    # alongside a handful of pre-existing ones on a fresh boot
+_incidents: dict[str, dict] = {}       # keyed by source name/id, one *open* incident per source
+_incident_counter = 10                 # first generated incident reads as INC-011, alongside the demo fleet's INC-01x
 _start_time = time.time()
+
+KNOWN_BUOY_UNIVERSAL_FIELDS = {"battery", "lat", "lng", "satellites", "signal_dbm"}
 
 
 def _clamp(v, lo, hi):
@@ -47,6 +49,16 @@ def _mean_revert_step(value, base, volatility, reversion=0.06, bias=0.0):
     if bias and random.random() < 0.15:
         delta += bias * random.uniform(0.5, 1.5)
     return value + delta
+
+
+def _parse_time(t):
+    if not t:
+        return utcnow()
+    try:
+        dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return utcnow()
 
 
 def _new_alert(severity: str, source_type: str, source: str, message: str) -> dict:
@@ -71,25 +83,26 @@ def _service_status(latency, cfg):
     return "healthy"
 
 
-def _buoy_status(buoy_id, battery, turbidity, cfg):
-    if battery <= 15:
+def _buoy_status(state):
+    """Status is deliberately conservative for anything outside the four
+    well-known metrics: a custom sensor (registered or auto-added via
+    ingest) is just plotted, never alerted on, since there's no notion of a
+    "normal range" for it without validation."""
+    if state["battery"] <= 15:
         return "critical", "low battery"
-    if cfg.get("turbidity_drift") and turbidity >= 8:
+    sensors = state["sensors"]
+    if "turbidity" in sensors and sensors["turbidity"]["value"] >= 8:
         return "warning", "sensor fault"
-    if cfg.get("gnss_degraded"):
-        return "warning", "GNSS degraded"
+    if "ph" in sensors and not (6.0 <= sensors["ph"]["value"] <= 9.0):
+        return "warning", "sensor fault"
     return "healthy", "healthy"
 
 
 def _handle_transition(source_type, source, old_status, new_status, detail_message):
     """Edge-triggered alerting: only fires when status actually changes, and
-    opens/closes an incident to match — this is what makes the Incidents tab
-    reflect genuine threshold crossings instead of a canned script."""
+    opens/closes an incident to match."""
     if old_status == new_status:
         return
-    severity_rank = {"healthy": 0, "warning": 1, "critical": 2}
-    getting_worse = severity_rank[new_status] > severity_rank[old_status]
-
     if new_status == "healthy":
         alert = _new_alert("resolved", source_type, source, f"{detail_message} cleared")
         incident = _incidents.get(source)
@@ -120,7 +133,6 @@ def _handle_transition(source_type, source, old_status, new_status, detail_messa
         incident["severity"] = sev
         incident["title"] = detail_message
         incident["events"].append(alert)
-    _ = getting_worse  # reserved for future use (e.g. escalation-only notifications)
 
 
 def _guess_cause(source_type: str, source: str) -> str:
@@ -129,83 +141,138 @@ def _guess_cause(source_type: str, source: str) -> str:
     return f"Sensor or hardware condition on {source} - no confirmed root cause yet."
 
 
+def _sensor_default_base(name):
+    for b in BUOYS:
+        if name in b.get("base", {}):
+            return b["base"][name]
+    return GENERIC_SENSOR_BASE
+
+
+def _sensor_default_volatility(name):
+    for b in BUOYS:
+        if name in b.get("volatility", {}):
+            return b["volatility"][name]
+    return GENERIC_SENSOR_VOLATILITY
+
+
+def _make_sensor_entry(name, unit=""):
+    base = _sensor_default_base(name)
+    return {"value": base, "unit": unit, "base": base, "volatility": _sensor_default_volatility(name), "simulated": True}
+
+
+# ---------------------------------------------------------------- registration
+
+def register_service(name, warn_ms=400.0, crit_ms=800.0, base_latency_ms=120.0, base_rps=500.0, volatility=20.0, bias=0.0):
+    if name in _services:
+        raise ValueError(f"service already exists: {name}")
+    _services[name] = {
+        "name": name,
+        "warn_ms": warn_ms, "crit_ms": crit_ms,
+        "base_latency_ms": base_latency_ms, "base_rps": base_rps, "volatility": volatility, "bias": bias,
+        "latency": base_latency_ms, "rps": base_rps, "error_rate": 0.02,
+        "status": "healthy",
+        "simulated": True,
+    }
+    return _services[name]
+
+
+def deregister_service(name):
+    if name not in _services:
+        raise KeyError(name)
+    del _services[name]
+    _incidents.pop(name, None)
+
+
+def register_buoy(buoy_id, lat, lng, sensors=None, units=None):
+    if buoy_id in _buoys:
+        raise ValueError(f"buoy already exists: {buoy_id}")
+    units = units or {}
+    sensor_dict = {s: _make_sensor_entry(s, units.get(s, DEFAULT_UNITS.get(s, ""))) for s in (sensors or [])}
+    _buoys[buoy_id] = {
+        "id": buoy_id,
+        "lat": lat, "lng": lng,
+        "battery": 80.0, "battery_simulated": True, "solar_watts": 3.5, "battery_drain": 0.0,
+        "satellites": random.randint(6, 9), "signal_dbm": -70.0, "position_simulated": True,
+        "last_contact": time.time(),
+        "status": "healthy", "status_text": "healthy",
+        "sensors": sensor_dict,
+    }
+    return _buoys[buoy_id]
+
+
+def deregister_buoy(buoy_id):
+    if buoy_id not in _buoys:
+        raise KeyError(buoy_id)
+    del _buoys[buoy_id]
+    _incidents.pop(buoy_id, None)
+
+
+def add_buoy_sensor(buoy_id, sensor, unit=""):
+    buoy = _buoys.get(buoy_id)
+    if not buoy:
+        raise KeyError(buoy_id)
+    if sensor in buoy["sensors"]:
+        raise ValueError(f"sensor already exists on {buoy_id}: {sensor}")
+    buoy["sensors"][sensor] = _make_sensor_entry(sensor, unit or DEFAULT_UNITS.get(sensor, ""))
+    return buoy["sensors"][sensor]
+
+
+def remove_buoy_sensor(buoy_id, sensor):
+    buoy = _buoys.get(buoy_id)
+    if not buoy:
+        raise KeyError(buoy_id)
+    if sensor not in buoy["sensors"]:
+        raise KeyError(sensor)
+    del buoy["sensors"][sensor]
+
+
 # ---------------------------------------------------------------- seeding
 
-def _init_service_state():
-    for svc in SERVICES:
-        _service_state[svc["name"]] = {
-            "latency": svc["base_latency_ms"],
-            "rps": svc["base_rps"],
-            "error_rate": round(random.uniform(0.0, 0.05), 3),
-            "status": "healthy",
-        }
-
-
-def _init_buoy_state():
-    for b in BUOYS:
-        state = {
-            **{k: v for k, v in b["base"].items()},
-            "battery": b["base_battery"],
-            "satellites": random.randint(6, 9),
-            "status": "healthy",
-            "last_contact": time.time(),
-        }
-        # Signal strength: weaker with distance from the mooring anchor, plus
-        # a bit of noise - not scientifically modeled, but at least tied to
-        # something real about the deployment rather than pure random jitter.
-        dist = ((b["lat"] - MOORING_LAT) ** 2 + (b["lng"] - MOORING_LNG) ** 2) ** 0.5
-        state["signal_dbm"] = round(-58 - dist * 2200 + random.uniform(-4, 4))
-        _buoy_state[b["id"]] = state
-
-
 def seed_history():
-    """Backfill ~history_minutes of 1-minute-resolution data so charts have
-    something to show the moment the dashboard loads, instead of an empty
-    graph that only fills in live over the next few hours."""
-    _init_service_state()
-    _init_buoy_state()
-
+    """Backfill ~history_minutes of 1-minute-resolution data for the built-in
+    demo fleet, so its charts aren't empty on first load. Anything you
+    register later starts fresh from "now", the way a real newly-deployed
+    sensor would - no fabricated backstory."""
     minutes = settings.history_minutes
     now = utcnow()
     points = []
 
     for svc in SERVICES:
-        v = svc["base_latency_ms"]
-        rps = svc["base_rps"]
+        register_service(
+            svc["name"], svc["warn_ms"], svc["crit_ms"],
+            svc["base_latency_ms"], svc["base_rps"], svc["volatility"], svc["bias"],
+        )
+        state = _services[svc["name"]]
+        v, rps = svc["base_latency_ms"], svc["base_rps"]
         for i in range(minutes, 0, -1):
             v = _clamp(_mean_revert_step(v, svc["base_latency_ms"], svc["volatility"], bias=svc["bias"]), 10, 1500)
             rps = _clamp(rps + (random.random() - 0.5) * (svc["base_rps"] * 0.05), 1, svc["base_rps"] * 3)
             err = _clamp(random.random() * (2.0 if v > svc["crit_ms"] else 0.3), 0, 5)
             t = now - timedelta(minutes=i)
-            points.append(make_point(
-                "service_metrics", {"service": svc["name"]},
-                {"latency_ms": v, "rps": rps, "error_rate": err}, time=t,
-            ))
-        _service_state[svc["name"]]["latency"] = v
-        _service_state[svc["name"]]["rps"] = rps
+            points.append(make_point("service_metrics", {"service": svc["name"]}, {"latency_ms": v, "rps": rps, "error_rate": err}, time=t))
+        state["latency"], state["rps"] = v, rps
 
     for b in BUOYS:
+        register_buoy(b["id"], b["lat"], b["lng"], sensors=list(b["base"].keys()), units=DEFAULT_UNITS)
+        state = _buoys[b["id"]]
+        state["solar_watts"] = b["solar_watts"]
+        state["battery_drain"] = b.get("battery_drain", 0.0)
+        drift_cfg = {"turbidity": b.get("turbidity_drift", 0.0)}
         vals = dict(b["base"])
         battery = b["base_battery"]
         for i in range(minutes, 0, -1):
-            for metric, vol in b["volatility"].items():
-                lo, hi = METRIC_RANGES[metric]
-                drift = b.get("turbidity_drift", 0) if metric == "turbidity" else 0
-                vals[metric] = _clamp(
-                    _mean_revert_step(vals[metric], b["base"][metric], vol) + drift, lo, hi
-                )
-            if b.get("battery_drain"):
-                battery = _clamp(battery - b["battery_drain"] * random.uniform(0.5, 1.5), 3, 100)
+            for name, cfg in state["sensors"].items():
+                lo, hi = METRIC_RANGES.get(name, (-1e9, 1e9))
+                vals[name] = _clamp(_mean_revert_step(vals[name], cfg["base"], cfg["volatility"]) + drift_cfg.get(name, 0.0), lo, hi)
+            if state["battery_drain"]:
+                battery = _clamp(battery - state["battery_drain"] * random.uniform(0.5, 1.5), 3, 100)
             else:
-                # gentle charge/discharge cycle so battery isn't perfectly flat
                 battery = _clamp(battery + (random.random() - 0.45) * 0.4, 20, 100)
             t = now - timedelta(minutes=i)
-            points.append(make_point(
-                "buoy_metrics", {"buoy": b["id"]},
-                {**vals, "battery": battery}, time=t,
-            ))
-        _buoy_state[b["id"]].update(vals)
-        _buoy_state[b["id"]]["battery"] = battery
+            points.append(make_point("buoy_metrics", {"buoy": b["id"]}, {**vals, "battery": battery}, time=t))
+        for name in state["sensors"]:
+            state["sensors"][name]["value"] = vals[name]
+        state["battery"] = battery
 
     write_points(points)
 
@@ -216,51 +283,49 @@ def _tick_once():
     now = utcnow()
     points = []
 
-    for svc in SERVICES:
-        state = _service_state[svc["name"]]
+    for name, state in list(_services.items()):
+        if not state["simulated"]:
+            continue  # real data comes via ingest; the simulator leaves it alone
         old_status = state["status"]
-        state["latency"] = _clamp(
-            _mean_revert_step(state["latency"], svc["base_latency_ms"], svc["volatility"], bias=svc["bias"]),
-            10, 1500,
-        )
-        state["rps"] = _clamp(state["rps"] + (random.random() - 0.5) * (svc["base_rps"] * 0.05), 1, svc["base_rps"] * 3)
-        state["error_rate"] = _clamp(random.random() * (2.0 if state["latency"] > svc["crit_ms"] else 0.3), 0, 5)
-        new_status = _service_status(state["latency"], svc)
+        state["latency"] = _clamp(_mean_revert_step(state["latency"], state["base_latency_ms"], state["volatility"], bias=state["bias"]), 10, 1500)
+        state["rps"] = _clamp(state["rps"] + (random.random() - 0.5) * (state["base_rps"] * 0.05), 1, state["base_rps"] * 4)
+        state["error_rate"] = _clamp(random.random() * (2.0 if state["latency"] > state["crit_ms"] else 0.3), 0, 5)
+        new_status = _service_status(state["latency"], state)
         state["status"] = new_status
-        detail = f"{svc['name']} - p95 latency at {state['latency']:.0f}ms"
-        _handle_transition("service", svc["name"], old_status, new_status, detail)
-        points.append(make_point(
-            "service_metrics", {"service": svc["name"]},
-            {"latency_ms": state["latency"], "rps": state["rps"], "error_rate": state["error_rate"]}, time=now,
-        ))
+        _handle_transition("service", name, old_status, new_status, f"{name} - p95 latency at {state['latency']:.0f}ms")
+        points.append(make_point("service_metrics", {"service": name}, {"latency_ms": state["latency"], "rps": state["rps"], "error_rate": state["error_rate"]}, time=now))
 
-    for b in BUOYS:
-        state = _buoy_state[b["id"]]
+    for buoy_id, state in list(_buoys.items()):
         old_status = state["status"]
-        for metric, vol in b["volatility"].items():
-            lo, hi = METRIC_RANGES[metric]
-            drift = b.get("turbidity_drift", 0) if metric == "turbidity" else 0
-            state[metric] = _clamp(_mean_revert_step(state[metric], b["base"][metric], vol) + drift, lo, hi)
-        if b.get("battery_drain"):
-            state["battery"] = _clamp(state["battery"] - b["battery_drain"] * random.uniform(0.5, 1.5), 3, 100)
-        else:
-            state["battery"] = _clamp(state["battery"] + (random.random() - 0.45) * 0.4, 20, 100)
+        for sname, cfg in state["sensors"].items():
+            if not cfg["simulated"]:
+                continue
+            lo, hi = METRIC_RANGES.get(sname, (-1e9, 1e9))
+            cfg["value"] = _clamp(_mean_revert_step(cfg["value"], cfg["base"], cfg["volatility"]), lo, hi)
+        if state["battery_simulated"]:
+            if state.get("battery_drain"):
+                state["battery"] = _clamp(state["battery"] - state["battery_drain"] * random.uniform(0.5, 1.5), 3, 100)
+            else:
+                state["battery"] = _clamp(state["battery"] + (random.random() - 0.45) * 0.4, 20, 100)
+        if state["position_simulated"]:
+            dist = ((state["lat"] - MOORING_LAT) ** 2 + (state["lng"] - MOORING_LNG) ** 2) ** 0.5
+            state["signal_dbm"] = round(-58 - dist * 2200 + random.uniform(-4, 4), 1)
         state["last_contact"] = time.time() if random.random() > 0.05 else state["last_contact"]  # occasional missed check-in
-        dist = ((b["lat"] - MOORING_LAT) ** 2 + (b["lng"] - MOORING_LNG) ** 2) ** 0.5
-        state["signal_dbm"] = round(-58 - dist * 2200 + random.uniform(-4, 4))
 
-        new_status, status_text = _buoy_status(b["id"], state["battery"], state["turbidity"], b)
+        new_status, status_text = _buoy_status(state)
         state["status"] = new_status
         state["status_text"] = status_text
         if new_status != old_status:
-            detail = f"{b['id']} - {status_text}"
-            _handle_transition("buoy", b["id"], old_status, new_status, detail)
-        points.append(make_point(
-            "buoy_metrics", {"buoy": b["id"]},
-            {k: state[k] for k in ("temp", "salinity", "turbidity", "ph", "battery")}, time=now,
-        ))
+            _handle_transition("buoy", buoy_id, old_status, new_status, f"{buoy_id} - {status_text}")
 
-    write_points(points)
+        fields = {sname: cfg["value"] for sname, cfg in state["sensors"].items() if cfg["simulated"]}
+        if state["battery_simulated"]:
+            fields["battery"] = state["battery"]
+        if fields:
+            points.append(make_point("buoy_metrics", {"buoy": buoy_id}, fields, time=now))
+
+    if points:
+        write_points(points)
 
 
 async def background_loop():
@@ -272,22 +337,151 @@ async def background_loop():
         await asyncio.sleep(settings.tick_seconds)
 
 
+# ---------------------------------------------------------------- ingest (real data)
+
+def ingest_service(name, latency_ms=None, rps=None, error_rate=None, time_str=None):
+    state = _services.get(name)
+    if not state:
+        raise KeyError(name)
+    fields = {}
+    if latency_ms is not None:
+        state["latency"] = latency_ms
+        fields["latency_ms"] = latency_ms
+    if rps is not None:
+        state["rps"] = rps
+        fields["rps"] = rps
+    if error_rate is not None:
+        state["error_rate"] = error_rate
+        fields["error_rate"] = error_rate
+    if not fields:
+        return state
+    state["simulated"] = False
+    old_status = state["status"]
+    new_status = _service_status(state["latency"], state)
+    state["status"] = new_status
+    _handle_transition("service", name, old_status, new_status, f"{name} - p95 latency at {state['latency']:.0f}ms")
+    write_points([make_point("service_metrics", {"service": name}, fields, time=_parse_time(time_str))])
+    return state
+
+
+def ingest_service_batch(name, readings):
+    for r in readings:
+        ingest_service(name, r.get("latency_ms"), r.get("rps"), r.get("error_rate"), r.get("time"))
+
+
+def ingest_buoy(buoy_id, fields_in: dict, time_str=None):
+    """fields_in may contain the universal fields (battery/lat/lng/satellites/
+    signal_dbm) plus any number of sensor readings by name, known or brand
+    new - an unrecognized field name is auto-registered as a new sensor on
+    this buoy rather than rejected, since there's no fixed schema per buoy."""
+    state = _buoys.get(buoy_id)
+    if not state:
+        raise KeyError(buoy_id)
+    old_status = state["status"]
+    influx_fields = {}
+
+    if fields_in.get("battery") is not None:
+        state["battery"] = float(fields_in["battery"])
+        state["battery_simulated"] = False
+        influx_fields["battery"] = state["battery"]
+
+    position_touched = False
+    for key in ("lat", "lng"):
+        if fields_in.get(key) is not None:
+            state[key] = float(fields_in[key])
+            position_touched = True
+    if fields_in.get("satellites") is not None:
+        state["satellites"] = int(fields_in["satellites"])
+        position_touched = True
+    if fields_in.get("signal_dbm") is not None:
+        state["signal_dbm"] = float(fields_in["signal_dbm"])
+        position_touched = True
+    if position_touched:
+        state["position_simulated"] = False
+
+    for key, value in fields_in.items():
+        if key in KNOWN_BUOY_UNIVERSAL_FIELDS or key == "time" or value is None:
+            continue
+        if key not in state["sensors"]:
+            state["sensors"][key] = _make_sensor_entry(key, DEFAULT_UNITS.get(key, ""))
+        state["sensors"][key]["value"] = float(value)
+        state["sensors"][key]["simulated"] = False
+        influx_fields[key] = float(value)
+
+    if influx_fields:
+        write_points([make_point("buoy_metrics", {"buoy": buoy_id}, influx_fields, time=_parse_time(time_str))])
+    state["last_contact"] = time.time()
+
+    new_status, status_text = _buoy_status(state)
+    state["status"] = new_status
+    state["status_text"] = status_text
+    if new_status != old_status:
+        _handle_transition("buoy", buoy_id, old_status, new_status, f"{buoy_id} - {status_text}")
+    return state
+
+
+def ingest_buoy_batch(buoy_id, readings):
+    for r in readings:
+        r = dict(r)
+        t = r.pop("time", None)
+        ingest_buoy(buoy_id, r, t)
+
+
+def buoy_heartbeat(buoy_id, signal_dbm=None):
+    state = _buoys.get(buoy_id)
+    if not state:
+        raise KeyError(buoy_id)
+    state["last_contact"] = time.time()
+    if signal_dbm is not None:
+        state["signal_dbm"] = signal_dbm
+        state["position_simulated"] = False
+    return state
+
+
+def resume_service_simulation(name):
+    state = _services.get(name)
+    if not state:
+        raise KeyError(name)
+    state["simulated"] = True
+    return state
+
+
+def resume_buoy_simulation(buoy_id, sensor=None):
+    state = _buoys.get(buoy_id)
+    if not state:
+        raise KeyError(buoy_id)
+    if sensor is None:
+        state["battery_simulated"] = True
+        state["position_simulated"] = True
+        for cfg in state["sensors"].values():
+            cfg["simulated"] = True
+    elif sensor == "battery":
+        state["battery_simulated"] = True
+    elif sensor == "position":
+        state["position_simulated"] = True
+    elif sensor in state["sensors"]:
+        state["sensors"][sensor]["simulated"] = True
+    else:
+        raise KeyError(sensor)
+    return state
+
+
 # ---------------------------------------------------------------- accessors used by routers
 
-def get_service_state(name: str) -> dict | None:
-    return _service_state.get(name)
+def get_service_state(name: str) -> Optional[dict]:
+    return _services.get(name)
 
 
 def get_all_service_states() -> dict[str, dict]:
-    return _service_state
+    return _services
 
 
-def get_buoy_state(buoy_id: str) -> dict | None:
-    return _buoy_state.get(buoy_id)
+def get_buoy_state(buoy_id: str) -> Optional[dict]:
+    return _buoys.get(buoy_id)
 
 
 def get_all_buoy_states() -> dict[str, dict]:
-    return _buoy_state
+    return _buoys
 
 
 def get_alerts(limit: int = 20) -> list[dict]:

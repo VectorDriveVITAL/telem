@@ -1,0 +1,35 @@
+ts=2026-09-15T02:05:47.818334Z lvl=info msg="Welcome to InfluxDB" log_id=15KhrJfW000 version=2.9.1 commit=d4fa1941fd build_date=2026-05-11T18:30:49Z log_level=info
+ts=2026-09-15T02:05:47.829436Z lvl=info msg="Resources opened" log_id=15KhrJfW000 service=bolt path=/users/yquan162/Downloads/telem-backend/.influxd-data/influxd.bolt
+ts=2026-09-15T02:05:47.829521Z lvl=info msg="Resources opened" log_id=15KhrJfW000 service=sqlite path=/users/yquan162/Downloads/telem-backend/.influxd-data/influxd.sqlite
+ts=2026-09-15T02:05:47.839190Z lvl=info msg="Creating authorization store" log_id=15KhrJfW000 store=auth UseHashedTokens=true
+ts=2026-09-15T02:05:47.839970Z lvl=info msg="Checking InfluxDB metadata for prior version." log_id=15KhrJfW000 bolt_path=/users/yquan162/Downloads/telem-backend/.influxd-data/influxd.bolt
+ts=2026-09-15T02:05:47.840051Z lvl=info msg="Using data dir" log_id=15KhrJfW000 service=storage-engine service=store path=/users/yquan162/Downloads/telem-backend/.influxd-data/engine/data
+ts=2026-09-15T02:05:47.840079Z lvl=info msg="Compaction settings" log_id=15KhrJfW000 service=storage-engine service=store max_concurrent_compactions=5 throughput_bytes_per_second=50331648 throughput_bytes_per_second_burst=50331648
+ts=2026-09-15T02:05:47.840087Z lvl=info msg="Open store (start)" log_id=15KhrJfW000 service=storage-engine service=store op_name=tsdb_open op_event=start
+ts=2026-09-15T02:05:47.845354Z lvl=info msg="index opened with 8 partitions" log_id=15KhrJfW000 service=storage-engine index=tsi
+ts=2026-09-15T02:05:47.845722Z lvl=info msg="loading changes (start)" log_id=15KhrJfW000 service=storage-engine engine=tsm1 op_name="field indices" path=/users/yquan162/Downloads/telem-backend/.influxd-data/engine/data/231d1f2b3a528456/autogen/1/fields.idxl op_event=start
+ts=2026-09-15T02:05:47.845744Z lvl=info msg="loading changes (end)" log_id=15KhrJfW000 service=storage-engine engine=tsm1 op_name="field indices" path=/users/yquan162/Downloads/telem-backend/.influxd-data/engine/data/231d1f2b3a528456/autogen/1/fields.idxl op_event=end op_elapsed=0.027ms
+ts=2026-09-15T02:05:47.845940Z lvl=info msg="Reading file" log_id=15KhrJfW000 service=storage-engine engine=tsm1 service=cacheloader path=/users/yquan162/Downloads/telem-backend/.influxd-data/engine/wal/231d1f2b3a528456/autogen/1/_00001.wal size=340281
+ts=2026-09-15T02:05:47.850649Z lvl=info msg="Opened shard" log_id=15KhrJfW000 service=storage-engine service=store op_name=tsdb_open db_shard_id=1 path=/users/yquan162/Downloads/telem-backend/.influxd-data/engine/data/231d1f2b3a528456/autogen/1 index_version=tsi1 duration=9.189ms
+ts=2026-09-15T02:05:47.850673Z lvl=info msg="Finished loading shard, current progress 100.0% shards (1 / 1)." log_id=15KhrJfW000 service=storage-engine
+ts=2026-09-15T02:05:47.850686Z lvl=info msg="Open store (end)" log_id=15KhrJfW000 service=storage-engine service=store op_name=tsdb_open op_event=end op_elapsed=10.598ms
+ts=2026-09-15T02:05:47.850695Z lvl=info msg="Starting retention policy enforcement service" log_id=15KhrJfW000 service=retention check_interval=30m
+ts=2026-09-15T02:05:47.850704Z lvl=info msg="Starting precreation service" log_id=15KhrJfW000 service=shard-precreation check_interval=10m advance_period=30m
+ts=2026-09-15T02:05:47.851193Z lvl=info msg="Starting query controller" log_id=15KhrJfW000 service=storage-reads concurrency_quota=1024 initial_memory_bytes_quota_per_query=9223372036854775807 memory_bytes_quota_per_query=9223372036854775807 max_memory_bytes=0 queue_size=1024
+ts=2026-09-15T02:05:47.852287Z lvl=info msg="Configuring InfluxQL statement executor (zeros indicate unlimited)." log_id=15KhrJfW000 max_select_point=0 max_select_series=0 max_select_buckets=0
+ts=2026-09-15T02:05:47.882405Z lvl=info msg=Starting log_id=15KhrJfW000 service=telemetry interval=8h
+ts=2026-09-15T02:05:47.882573Z lvl=info msg=Listening log_id=15KhrJfW000 service=tcp-listener transport=http addr=:8086 port=8086
+ts=2026-09-15T02:08:01.466054Z lvl=info msg="saving field index changes (start)" log_id=15KhrJfW000 service=storage-engine engine=tsm1 op_name=MeasurementFieldSet op_event=start
+ts=2026-09-15T02:08:01.467990Z lvl=info msg="saving field index changes (end)" log_id=15KhrJfW000 service=storage-engine engine=tsm1 op_name=MeasurementFieldSet op_event=end op_elapsed=1.950ms
+ts=2026-09-15T02:30:07.562414Z lvl=info msg=Stopping log_id=15KhrJfW000 service=telemetry interval=8h
+ts=2026-09-15T02:30:07.562380Z lvl=info msg="Terminating precreation service" log_id=15KhrJfW000 service=shard-precreation
+ts=2026-09-15T02:30:07.562397Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem="HTTP server"
+ts=2026-09-15T02:30:07.564087Z lvl=info msg=Stopping log_id=15KhrJfW000 service=tcp-listener
+ts=2026-09-15T02:30:07.564271Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=scraper
+ts=2026-09-15T02:30:07.564343Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=task
+ts=2026-09-15T02:30:07.564765Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=query
+ts=2026-09-15T02:30:07.567241Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=replications
+ts=2026-09-15T02:30:07.567319Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=engine
+ts=2026-09-15T02:30:07.567331Z lvl=info msg="Closing retention policy enforcement service" log_id=15KhrJfW000 service=retention
+ts=2026-09-15T02:30:07.579619Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=sqlite
+ts=2026-09-15T02:30:07.579750Z lvl=info msg="Stopping subsystem" log_id=15KhrJfW000 subsystem=bolt

@@ -210,6 +210,9 @@
   .scrub-status.live{ color:var(--green); }
   .scrub-status.replay{ color:var(--amber); cursor:pointer; }
   .replay-banner{ position:absolute; top:8px; left:14px; font-family:"IBM Plex Mono", monospace; font-size:10px; color:var(--amber); background:var(--bg-panel-alt); border:1px solid var(--amber-dim); border-radius:var(--radius); padding:2px 8px; opacity:0; pointer-events:none; }
+  .chart-zoom-controls{ position:absolute; right:14px; bottom:10px; display:flex; flex-direction:column; gap:3px; z-index:2; }
+  .chart-zoom-btn{ width:22px; height:22px; padding:0; background:var(--bg-panel-alt); border:1px solid var(--line); color:var(--text-mid); font-family:"IBM Plex Mono", monospace; font-size:13px; line-height:1; cursor:pointer; border-radius:var(--radius); display:flex; align-items:center; justify-content:center; }
+  .chart-zoom-btn:hover{ border-color:var(--amber); color:var(--amber); }
   .replay-banner.show{ opacity:1; }
 
   .gnss-coords{ font-family:"IBM Plex Mono", monospace; font-size:14px; font-weight:600; margin-top:4px; }
@@ -265,7 +268,7 @@
   .compass-pointer-dot{ fill:var(--amber); }
 
   /* ---------- leaflet map theming ---------- */
-  .leaflet-container{ background:var(--bg) !important; font-family:"IBM Plex Mono", monospace; }
+  .leaflet-container{ background:var(--bg) !important; font-family:"IBM Plex Mono", monospace; isolation:isolate; }
   .buoy-marker{ width:12px; height:12px; border-radius:2px; border:2px solid; background:var(--bg-panel); box-shadow:0 0 0 3px rgba(20,17,13,.6); }
   .buoy-marker.ok{ border-color:var(--green); }
   .buoy-marker.warn{ border-color:var(--amber); }
@@ -487,14 +490,14 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">Request latency - telemetry-gateway</div>
-              <div class="panel-sub">p95, milliseconds</div>
+              <div class="panel-sub" id="chart-sub-services">p95, milliseconds - last 1h</div>
             </div>
             <div style="display:flex; align-items:center; gap:14px;">
-              <div class="range-group">
-                <button class="range-btn">15m</button>
-                <button class="range-btn active">1h</button>
-                <button class="range-btn">6h</button>
-                <button class="range-btn">24h</button>
+              <div class="range-group" id="range-group-services">
+                <button class="range-btn" data-minutes="15">15m</button>
+                <button class="range-btn active" data-minutes="60">1h</button>
+                <button class="range-btn" data-minutes="360">6h</button>
+                <button class="range-btn" data-minutes="1440">24h</button>
               </div>
               <button class="export-btn" id="compare-toggle-services">Compare</button>
               <button class="export-btn">Export CSV</button>
@@ -507,6 +510,11 @@
           </div>
           <div class="chart-wrap" id="wrap-services">
             <div class="replay-banner mono" id="replay-banner-services">REPLAY</div>
+            <div class="chart-zoom-controls">
+              <button class="chart-zoom-btn" data-zoom="in" title="Zoom in">+</button>
+              <button class="chart-zoom-btn" data-zoom="out" title="Zoom out">−</button>
+              <button class="chart-zoom-btn" data-zoom="reset" title="Reset zoom">⟲</button>
+            </div>
             <div class="chart-label-layer mono">
               <span class="axis-label-html" style="top:5%">1000ms</span>
               <span class="axis-label-html" style="top:30%">500ms</span>
@@ -598,23 +606,29 @@
               <div class="panel-sub" id="chart-sub-sensors">°C, last 60 samples</div>
             </div>
             <div style="display:flex; align-items:center; gap:14px;">
-              <div class="metric-select" id="metric-select">
-                <button class="range-btn active" data-metric="temp">Temp</button>
-                <button class="range-btn" data-metric="sal">Salinity</button>
-                <button class="range-btn" data-metric="turb">Turbidity</button>
-                <button class="range-btn" data-metric="ph">pH</button>
-              </div>
+              <div class="metric-select" id="metric-select"></div>
               <button class="export-btn" id="compare-toggle-sensors">Compare</button>
               <button class="export-btn">Export CSV</button>
             </div>
           </div>
           <div class="compare-legend" id="compare-legend-sensors"></div>
           <div class="scrub-bar">
+            <div class="range-group" id="range-group-sensors">
+              <button class="range-btn" data-minutes="15">15m</button>
+              <button class="range-btn active" data-minutes="60">1h</button>
+              <button class="range-btn" data-minutes="360">6h</button>
+              <button class="range-btn" data-minutes="1440">24h</button>
+            </div>
             <input type="range" class="scrub-range" id="scrub-range-sensors" min="0" max="180" value="180">
             <span class="scrub-status live mono" id="scrub-status-sensors">● LIVE</span>
           </div>
           <div class="chart-wrap" id="wrap-sensors">
             <div class="replay-banner mono" id="replay-banner-sensors">REPLAY</div>
+            <div class="chart-zoom-controls">
+              <button class="chart-zoom-btn" data-zoom="in" title="Zoom in">+</button>
+              <button class="chart-zoom-btn" data-zoom="out" title="Zoom out">−</button>
+              <button class="chart-zoom-btn" data-zoom="reset" title="Reset zoom">⟲</button>
+            </div>
             <div class="chart-label-layer mono">
               <span class="axis-label-html" id="axl-0" style="top:5%">30</span>
               <span class="axis-label-html" id="axl-1" style="top:30%">20</span>
@@ -640,12 +654,7 @@
           <div class="panel">
             <div class="panel-head"><div class="panel-title">Current readings - buoy-01</div></div>
             <div class="stat-body">
-              <div class="readout-grid">
-                <div><div class="readout-label">TEMP</div><div class="readout-val">18.4<span class="readout-unit">°C</span></div><div class="readout-delta up">▲ 0.3 / hr</div></div>
-                <div><div class="readout-label">SALINITY</div><div class="readout-val">34.2<span class="readout-unit">psu</span></div><div class="readout-delta down">▼ 0.1 / hr</div></div>
-                <div><div class="readout-label">TURBIDITY</div><div class="readout-val">3.1<span class="readout-unit">NTU</span></div><div class="readout-delta up">▲ 0.4 / hr</div></div>
-                <div><div class="readout-label">PH</div><div class="readout-val">8.06</div><div class="readout-delta down">▼ 0.02 / hr</div></div>
-              </div>
+              <div class="readout-grid" id="current-readings-grid"></div>
             </div>
           </div>
           <div class="panel">
@@ -778,12 +787,7 @@
 
   <div class="drawer-section">
     <div class="drawer-section-title">CURRENT READINGS</div>
-    <div class="readout-grid">
-      <div><div class="readout-label">TEMP</div><div class="readout-val" id="dw-temp">-<span class="readout-unit">°C</span></div></div>
-      <div><div class="readout-label">SALINITY</div><div class="readout-val" id="dw-sal">-<span class="readout-unit">psu</span></div></div>
-      <div><div class="readout-label">TURBIDITY</div><div class="readout-val" id="dw-turb">-<span class="readout-unit">NTU</span></div></div>
-      <div><div class="readout-label">PH</div><div class="readout-val" id="dw-ph">-</div></div>
-    </div>
+    <div class="readout-grid" id="dw-readings"></div>
   </div>
 
   <div class="drawer-section">
@@ -916,8 +920,11 @@
   });
 
   /* ============ generic line-chart factory ============ */
-  function makeChart({ pathId, headId, hoverId, crosshairId, dotId, tooltipId, wrapId, svgId, domainMax, unit, decimals, onResize }){
-    let W=600; const H=200, PAD_TOP=10, PAD_BOTTOM=190, N=60;
+  function makeChart({ pathId, headId, hoverId, crosshairId, dotId, tooltipId, wrapId, svgId, domainMax, domainMin, unit, decimals, onResize }){
+    let W=600; const H=200, PAD_TOP=10, PAD_BOTTOM=190;
+    const HN = 240;
+    const N_DEFAULT = 60, N_MIN = 10, N_MAX = HN;
+    let N = N_DEFAULT; // visible window size, in points - this is what mouse/button zoom changes
     let fmtUnit = unit, fmtDecimals = decimals;
     function setFormat(newUnit, newDecimals){ fmtUnit = newUnit; fmtDecimals = newDecimals; }
     const el = {
@@ -927,21 +934,23 @@
       wrap: document.getElementById(wrapId), svg: document.getElementById(svgId)
     };
     let dMax = domainMax;
-    const HN = 240;
+    let dMin = domainMin || 0;
     let history = [];
     let scrubOffset = 0;
     function xAt(i){ return (i/(N-1))*W; }
-    function yAt(v){ return PAD_TOP + (1 - v/dMax) * (PAD_BOTTOM-PAD_TOP); }
+    function yAt(v){ return PAD_TOP + (1 - (v-dMin)/(dMax-dMin)) * (PAD_BOTTOM-PAD_TOP); }
     function pathFrom(arr){ return arr.map((v,i)=> `${i===0?'M':'L'}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(' '); }
 
     let data = [];
     let tooltipVisible = false;
 
-    function setHistory(fullArr, newDomainMax){
+    function setHistory(fullArr, newDomainMax, newDomainMin){
       history = fullArr.slice();
-      if(newDomainMax) dMax = newDomainMax;
+      if(newDomainMax !== undefined) dMax = newDomainMax;
+      if(newDomainMin !== undefined) dMin = newDomainMin;
       scrubOffset = 0;
-      data = history.slice(-60);
+      N = N_DEFAULT;
+      data = history.slice(-N);
       render(true);
     }
     function extendHistory(seedArr){
@@ -959,16 +968,48 @@
       return pre.concat(seedArr);
     }
     function scrubTo(offsetFromLive){
-      offsetFromLive = Math.max(0, Math.min(HN-60, offsetFromLive));
+      offsetFromLive = Math.max(0, Math.min(HN-N, offsetFromLive));
       scrubOffset = offsetFromLive;
       const end = history.length - offsetFromLive;
-      data = history.slice(end-60, end);
+      data = history.slice(end-N, end);
+      render(false);
+    }
+    // Zooms the visible window size by `factor` (<1 = zoom in/narrower time
+    // span, >1 = zoom out/wider), anchored so whatever point sits at
+    // `anchorFraction` (0 = left/oldest edge of the current view, 1 =
+    // right/newest edge) stays under that same fraction after the resize -
+    // this is what makes scroll-to-zoom feel like it's zooming toward the
+    // cursor rather than always recentering on the live edge.
+    function zoomBy(factor, anchorFraction){
+      if(anchorFraction === undefined) anchorFraction = 1;
+      const end = history.length - scrubOffset;
+      const histIdx = (end - N) + anchorFraction * (N - 1);
+      const newN = Math.max(N_MIN, Math.min(N_MAX, Math.round(N * factor)));
+      if(newN === N) return false;
+      N = newN;
+      const newEnd = Math.round(histIdx - anchorFraction * (N - 1) + N);
+      scrubOffset = Math.max(0, Math.min(HN - N, history.length - newEnd));
+      const e2 = history.length - scrubOffset;
+      data = history.slice(e2 - N, e2);
+      render(false);
+      return true;
+    }
+    function resetZoom(){
+      N = N_DEFAULT;
+      scrubOffset = 0;
+      data = history.slice(-N);
       render(false);
     }
     function isLive(){ return scrubOffset === 0; }
+    function getDomain(){ return { min: dMin, max: dMax }; }
+    function setDomain(newMax, newMin){
+      dMax = newMax;
+      if(newMin !== undefined) dMin = newMin;
+      render(false);
+    }
 
-    function setData(arr, newDomainMax){
-      setHistory(extendHistory(arr), newDomainMax);
+    function setData(arr, newDomainMax, newDomainMin){
+      setHistory(extendHistory(arr), newDomainMax, newDomainMin);
     }
     function render(drawIn){
       if(!data.length) return;
@@ -986,7 +1027,7 @@
       v = Math.max(min, Math.min(max, v));
       history.shift(); history.push(v);
       if(scrubOffset === 0){
-        data = history.slice(-60);
+        data = history.slice(-N);
         el.path.style.strokeDasharray = ''; el.path.style.strokeDashoffset = '';
         render(false);
         anime({ targets: el.head, r:[5.5,2.6], duration:500, easing:'easeOutQuad' });
@@ -995,7 +1036,7 @@
     function appendRealPoint(value){
       history.shift(); history.push(value);
       if(scrubOffset === 0){
-        data = history.slice(-60);
+        data = history.slice(-N);
         el.path.style.strokeDasharray = ''; el.path.style.strokeDashoffset = '';
         render(false);
         anime({ targets: el.head, r:[5.5,2.6], duration:500, easing:'easeOutQuad' });
@@ -1100,7 +1141,7 @@
     }
     function clearSeries(){ Object.keys(extraSeries).forEach(removeSeries); }
 
-    return { setData, pushPoint, appendRealPoint, flashAt, scrubTo, isLive, getHistoryLen: ()=>HN, getData: ()=>data, addSeries, removeSeries, clearSeries, setFormat, getWidth: ()=>W };
+    return { setData, pushPoint, appendRealPoint, flashAt, scrubTo, isLive, getDomain, setDomain, getHistoryLen: ()=>HN, getData: ()=>data, addSeries, removeSeries, clearSeries, setFormat, getWidth: ()=>W, zoomBy, resetZoom, getScrubOffset: ()=>scrubOffset, getWindowSize: ()=>N };
   }
 
   /* ---------- services chart ---------- */
@@ -1139,40 +1180,115 @@
   }
 
   /* ---------- sensor chart ---------- */
-  const METRICS = {
-    temp: { label:'Water temperature', unit:'°C', min:0, max:30, decimals:1, axis:['30','20','10','0'] },
-    sal:  { label:'Salinity', unit:'psu', min:28, max:38, decimals:1, axis:['38','35','32','28'] },
-    turb: { label:'Turbidity', unit:'NTU', min:0, max:15, decimals:1, axis:['15','10','5','0'] },
-    ph:   { label:'pH', unit:'', min:6.5, max:8.5, decimals:2, axis:['8.5','7.8','7.2','6.5'] }
+  const KNOWN_METRIC_DISPLAY = {
+    temp:      { label:'Water temperature', decimals:1, min:0,    max:30 },
+    salinity:  { label:'Salinity',          decimals:1, min:28,   max:38 },
+    turbidity: { label:'Turbidity',         decimals:1, min:0,    max:15 },
+    ph:        { label:'pH',                decimals:2, min:6.5,  max:8.5 },
   };
-  const METRIC_API_KEY = { temp:'temp', sal:'salinity', turb:'turbidity', ph:'ph' };
+  function prettySensorLabel(name){
+    return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, c=> c.toUpperCase());
+  }
+  // Known sensors get familiar fixed axis ranges; anything else (custom,
+  // ingested, or added via POST /api/buoys/{id}/sensors) auto-scales from
+  // whatever data actually came back, since there's no "normal range" for
+  // an arbitrary field name to fall back on.
+  function buildMetricConfig(sensorName, unit, values){
+    const known = KNOWN_METRIC_DISPLAY[sensorName];
+    if(known) return { label: known.label, unit, decimals: known.decimals, min: known.min, max: known.max };
+    let lo = Math.min(...values), hi = Math.max(...values);
+    if(!isFinite(lo) || !isFinite(hi)){ lo = 0; hi = 1; }
+    if(lo === hi){ lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.15;
+    lo -= pad; hi += pad;
+    const span = hi - lo;
+    const decimals = span < 5 ? 2 : span < 50 ? 1 : 0;
+    return { label: prettySensorLabel(sensorName), unit, decimals, min: lo, max: hi };
+  }
+  function updateSensorAxisLabels(cfg){
+    const span = cfg.max - cfg.min;
+    const axisLabels = [cfg.max, cfg.max - span/3, cfg.max - span*2/3, cfg.min].map(v=> v.toFixed(cfg.decimals));
+    ['axl-0','axl-1','axl-2','axl-3'].forEach((id,i)=> document.getElementById(id).textContent = axisLabels[i]);
+  }
+  // Live values can exceed the range the chart was scaled to when the tab
+  // was opened (e.g. a real sensor reporting values far outside whatever
+  // placeholder data existed at the time) - for an auto-scaled (unknown)
+  // sensor, re-fit the domain whenever the live data actually falls outside
+  // it, rather than leaving the trace to run off the top of the chart.
+  // Known sensors keep their fixed physical ranges and are deliberately
+  // excluded - a bad known-metric reading should look wrong, not rescale
+  // the whole chart around it.
+  function maybeRescaleAutoMetric(){
+    if(KNOWN_METRIC_DISPLAY[currentMetric]) return;
+    const data = sensorChart.getData();
+    if(!data.length) return;
+    const domain = sensorChart.getDomain();
+    const lo = Math.min(...data), hi = Math.max(...data);
+    if(lo >= domain.min && hi <= domain.max) return; // still fits - leave it alone
+    const buoy = BUOY_DATA[currentBuoyId];
+    const unit = (buoy && buoy.sensors[currentMetric]) ? buoy.sensors[currentMetric].unit : '';
+    const cfg = buildMetricConfig(currentMetric, unit, data);
+    sensorChart.setDomain(cfg.max, cfg.min);
+    sensorChart.setFormat(cfg.unit, cfg.decimals);
+    updateSensorAxisLabels(cfg);
+  }
+
   let currentMetric = 'temp';
   let currentBuoyId = 'buoy-01';
   let currentServiceName = null; // set once /api/services responds, in boot()
   const sensorChart = makeChart({
     pathId:'trace-path-sensors', headId:'trace-head-sensors', hoverId:'hover-rect-sensors',
     crosshairId:'crosshair-sensors', dotId:'crosshair-dot-sensors', tooltipId:'tooltip-sensors',
-    wrapId:'wrap-sensors', svgId:'chart-sensors', domainMax:30, unit:'°C', decimals:1
+    wrapId:'wrap-sensors', svgId:'chart-sensors', domainMax:30, domainMin:0, unit:'°C', decimals:1
   });
 
-  async function fetchServiceSeries(name){
-    const res = await fetch(`/api/services/${encodeURIComponent(name)}/timeseries?minutes=60`);
+  let svcRangeMinutes = 60;
+  let sensorRangeMinutes = 60;
+  const RANGE_LABEL = { 15: '15m', 60: '1h', 360: '6h', 1440: '24h' };
+
+  async function fetchServiceSeries(name, minutes){
+    const res = await fetch(`/api/services/${encodeURIComponent(name)}/timeseries?minutes=${minutes || svcRangeMinutes}`);
     if(!res.ok) return [];
     const points = await res.json();
     return points.map(p=> p.value);
   }
-  async function fetchBuoySeries(buoyId, metricKey){
-    const res = await fetch(`/api/buoys/${encodeURIComponent(buoyId)}/timeseries?metric=${METRIC_API_KEY[metricKey]}&minutes=60`);
+  async function fetchBuoySeries(buoyId, sensorName, minutes){
+    const res = await fetch(`/api/buoys/${encodeURIComponent(buoyId)}/timeseries?metric=${encodeURIComponent(sensorName)}&minutes=${minutes || sensorRangeMinutes}`);
     if(!res.ok) return [];
     const points = await res.json();
     return points.map(p=> p.value);
   }
 
-  async function switchMetric(key){
-    currentMetric = key;
-    const m = METRICS[key];
-    const series = await fetchBuoySeries(currentBuoyId, key);
-    if(series.length) sensorChart.setData(series, m.max);
+  // Rebuilds the tab bar for whichever buoy is selected, from that buoy's
+  // actual sensor set - this is what makes a newly-added sensor (however
+  // it got there: registration, or just showing up via ingest) appear as
+  // its own tab without any client-side hardcoding of names.
+  function renderMetricTabs(sensorNames){
+    const container = document.getElementById('metric-select');
+    if(!sensorNames.length){
+      container.innerHTML = '<span style="font-family:\'IBM Plex Mono\',monospace; font-size:11px; color:var(--text-low);">no sensors</span>';
+      return;
+    }
+    if(!sensorNames.includes(currentMetric)) currentMetric = sensorNames[0];
+    container.innerHTML = sensorNames.map(s=>
+      `<button class="range-btn${s===currentMetric?' active':''}" data-metric="${s}">${prettySensorLabel(s)}</button>`
+    ).join('');
+    container.querySelectorAll('button').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        container.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+        switchMetric(btn.dataset.metric);
+      });
+    });
+  }
+
+  async function switchMetric(sensorName){
+    currentMetric = sensorName;
+    const series = await fetchBuoySeries(currentBuoyId, sensorName);
+    const buoy = (BUOY_DATA[currentBuoyId] && BUOY_DATA[currentBuoyId].sensors) || {};
+    const unit = buoy[sensorName] ? buoy[sensorName].unit : '';
+    const cfg = buildMetricConfig(sensorName, unit, series.length ? series : [0]);
+    if(series.length) sensorChart.setData(series, cfg.max, cfg.min);
     if(typeof resetScrubUI === 'function') resetScrubUI('sensors');
     if(compareMode.sensors){
       Object.keys(compareSeries.sensors).forEach(name=> sensorChart.removeSeries(name));
@@ -1180,34 +1296,29 @@
       document.querySelectorAll('#sidebar-sensors .svc-item.compared').forEach(i=> i.classList.remove('compared'));
       if(typeof renderLegend === 'function') renderLegend('sensors');
     }
-    sensorChart.setFormat(m.unit, m.decimals);
-    document.getElementById('chart-panel-sensors').querySelector('.panel-title').textContent = m.label + ' - ' + currentBuoyId;
-    document.getElementById('chart-sub-sensors').textContent = (m.unit||'index') + ', last 60 samples';
-    const labels = m.axis;
-    ['axl-0','axl-1','axl-2','axl-3'].forEach((id,i)=> document.getElementById(id).textContent = labels[i]);
+    sensorChart.setFormat(cfg.unit, cfg.decimals);
+    document.getElementById('chart-panel-sensors').querySelector('.panel-title').textContent = cfg.label + ' - ' + currentBuoyId;
+    document.getElementById('chart-sub-sensors').textContent = (cfg.unit || 'index') + ', last ' + (RANGE_LABEL[sensorRangeMinutes] || '1h');
+    updateSensorAxisLabels(cfg);
   }
-  // rebuild chart's tooltip formatting per metric by wrapping pushPoint/setData unit+decimals
-  function makeSensorChartForMetric(){
-    // patch the closures inside makeChart by re-creating tooltip text via a thin wrapper:
-  }
-  switchMetric('temp');
 
   /* ---------- time-travel scrubber ---------- */
   function resetScrubUI(scope){
-    const range = document.getElementById('scrub-range-' + scope);
-    const status = document.getElementById('scrub-status-' + scope);
-    const banner = document.getElementById('replay-banner-' + scope);
-    if(!range) return;
-    range.value = range.max;
-    status.textContent = '● LIVE';
-    status.classList.add('live'); status.classList.remove('replay');
-    banner.classList.remove('show');
+    // Delegates to the zoom-aware refresh logic (defined below as
+    // scrubCtrlServices/scrubCtrlSensors) rather than just resetting
+    // range.value to range.max - since a zoom action may have changed the
+    // window size (and therefore what range.max should even be) since the
+    // last time this scope's slider was touched, the old "just reset value"
+    // approach could leave it showing an amount of scrub room that no
+    // longer matches the chart's actual current window size.
+    const ctrl = scope === 'services' ? scrubCtrlServices : scrubCtrlSensors;
+    if(ctrl) ctrl.refresh();
   }
-  function wireScrub(rangeId, statusId, bannerId, chart){
+  function wireScrub(rangeId, statusId, bannerId, chart, onChange){
     const range = document.getElementById(rangeId);
     const status = document.getElementById(statusId);
     const banner = document.getElementById(bannerId);
-    const maxOffset = chart.getHistoryLen() - 60;
+    let maxOffset = chart.getHistoryLen() - chart.getWindowSize();
     range.max = maxOffset;
     range.value = maxOffset;
     function fmt(mins){
@@ -1223,6 +1334,22 @@
       status.classList.toggle('live', live);
       status.classList.toggle('replay', !live);
       banner.classList.toggle('show', !live);
+      if(onChange) onChange();
+    }
+    // Called after a zoom changes the window size, since that changes how
+    // far back scrubbing can go - reflects the chart's current (zoom
+    // already repositioned it) scrub offset in the slider rather than
+    // resetting to live, so zooming doesn't yank you back to the present.
+    function refresh(){
+      maxOffset = chart.getHistoryLen() - chart.getWindowSize();
+      range.max = maxOffset;
+      const offsetFromLive = chart.getScrubOffset();
+      range.value = maxOffset - offsetFromLive;
+      const live = offsetFromLive === 0;
+      status.textContent = fmt(offsetFromLive);
+      status.classList.toggle('live', live);
+      status.classList.toggle('replay', !live);
+      banner.classList.toggle('show', !live);
     }
     range.addEventListener('input', apply);
     status.addEventListener('click', ()=>{
@@ -1231,16 +1358,76 @@
         apply();
       }
     });
+    return { refresh };
   }
-  wireScrub('scrub-range-services', 'scrub-status-services', 'replay-banner-services', svcChart);
-  wireScrub('scrub-range-sensors', 'scrub-status-sensors', 'replay-banner-sensors', sensorChart);
+  const scrubCtrlServices = wireScrub('scrub-range-services', 'scrub-status-services', 'replay-banner-services', svcChart);
+  const scrubCtrlSensors = wireScrub('scrub-range-sensors', 'scrub-status-sensors', 'replay-banner-sensors', sensorChart, maybeRescaleAutoMetric);
 
-  document.querySelectorAll('#metric-select button').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      document.querySelectorAll('#metric-select button').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      switchMetric(btn.dataset.metric);
+  /* ---------- chart zoom: mouse wheel + buttons ----------
+     Zooms the visible window size (how many points are shown, i.e. how
+     wide a time span the chart currently covers), independent of the
+     15m/1h/6h/24h range controls (those change how much history gets
+     *fetched*; this changes how much of what's already fetched is *shown
+     at once* - "zoom into the waveform" rather than "load a different
+     window"). Wheel zooms toward the cursor; the +/- buttons zoom
+     centered, since there's no cursor position to anchor to. */
+  function wireChartZoom(chart, wrapId, hoverId, scrubCtrl, onZoomChange){
+    const wrap = document.getElementById(wrapId);
+    const hoverEl = document.getElementById(hoverId);
+    function afterZoom(){
+      if(scrubCtrl) scrubCtrl.refresh();
+      if(onZoomChange) onZoomChange();
+    }
+    hoverEl.addEventListener('wheel', (e)=>{
+      e.preventDefault();
+      const rect = hoverEl.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      if(chart.zoomBy(e.deltaY < 0 ? 0.85 : 1.18, frac)) afterZoom();
+    }, { passive: false });
+    wrap.querySelectorAll('.chart-zoom-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        if(btn.dataset.zoom === 'reset'){ chart.resetZoom(); afterZoom(); return; }
+        if(chart.zoomBy(btn.dataset.zoom === 'in' ? 0.7 : 1.4, 0.5)) afterZoom();
+      });
     });
+  }
+  wireChartZoom(svcChart, 'wrap-services', 'hover-rect-services', scrubCtrlServices);
+  wireChartZoom(sensorChart, 'wrap-sensors', 'hover-rect-sensors', scrubCtrlSensors, maybeRescaleAutoMetric);
+
+  /* ---------- time-range zoom (15m/1h/6h/24h) ----------
+     The backend already aggregates any requested window down to ~60
+     points, so "zoom" here just means refetching at a different `minutes`
+     value - no separate zoom math needed. Live tail-appending only makes
+     sense at the default 1h window (each poll tick is one new point at
+     roughly 1-per-minute granularity); at a wider or narrower window a
+     single new reading isn't the right granularity to tack onto the end,
+     so live-append pauses until you click back to 1h. */
+  document.getElementById('range-group-services').addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button[data-minutes]');
+    if(!btn) return;
+    document.querySelectorAll('#range-group-services button').forEach(b=> b.classList.remove('active'));
+    btn.classList.add('active');
+    svcRangeMinutes = Number(btn.dataset.minutes);
+    document.getElementById('chart-sub-services').textContent = `p95, milliseconds - last ${RANGE_LABEL[svcRangeMinutes]}`;
+    const series = await fetchServiceSeries(currentServiceName, svcRangeMinutes);
+    if(series.length) svcChart.setData(series);
+    if(typeof resetScrubUI === 'function') resetScrubUI('services');
+  });
+  document.getElementById('range-group-sensors').addEventListener('click', async (e)=>{
+    const btn = e.target.closest('button[data-minutes]');
+    if(!btn) return;
+    document.querySelectorAll('#range-group-sensors button').forEach(b=> b.classList.remove('active'));
+    btn.classList.add('active');
+    sensorRangeMinutes = Number(btn.dataset.minutes);
+    const series = await fetchBuoySeries(currentBuoyId, currentMetric, sensorRangeMinutes);
+    const buoy = BUOY_DATA[currentBuoyId];
+    const unit = (buoy && buoy.sensors[currentMetric]) ? buoy.sensors[currentMetric].unit : '';
+    const cfg = buildMetricConfig(currentMetric, unit, series.length ? series : [0]);
+    if(series.length) sensorChart.setData(series, cfg.max, cfg.min);
+    sensorChart.setFormat(cfg.unit, cfg.decimals);
+    updateSensorAxisLabels(cfg);
+    document.getElementById('chart-sub-sensors').textContent = (cfg.unit || 'index') + ', last ' + RANGE_LABEL[sensorRangeMinutes];
+    if(typeof resetScrubUI === 'function') resetScrubUI('sensors');
   });
 
   /* ---------- battery sparkline (fed real values by pollLive) ---------- */
@@ -1308,6 +1495,9 @@
   wireSidebar('sidebar-services', 'services', svcChart, fetchServiceSeries, {
     onSelect: async (name)=>{
       currentServiceName = name;
+      svcRangeMinutes = 60;
+      document.querySelectorAll('#range-group-services button').forEach(b=> b.classList.toggle('active', b.dataset.minutes === '60'));
+      document.getElementById('chart-sub-services').textContent = 'p95, milliseconds - last 1h';
       document.querySelector('#chart-panel-services .panel-title').textContent = `Request latency - ${name}`;
       const series = await fetchServiceSeries(name);
       if(series.length) svcChart.setData(series);
@@ -1406,6 +1596,17 @@
   const drawer = document.getElementById('buoy-drawer');
   let activeBuoy = null;
 
+  function renderReadoutGrid(containerId, sensors){
+    const el = document.getElementById(containerId);
+    const names = Object.keys(sensors);
+    el.innerHTML = names.length
+      ? names.map(name=>{
+          const s = sensors[name];
+          const decimals = Math.abs(s.value) < 10 ? 2 : 1;
+          return `<div><div class="readout-label">${name.toUpperCase()}</div><div class="readout-val">${s.value.toFixed(decimals)}${s.unit ? `<span class="readout-unit">${s.unit}</span>` : ''}</div></div>`;
+        }).join('')
+      : '<div style="color:var(--text-low); font-family:\'IBM Plex Mono\',monospace; font-size:11px;">no sensors registered</div>';
+  }
   function openDrawer(id){
     const d = BUOY_DATA[id];
     if(!d) return;
@@ -1413,10 +1614,7 @@
     const statusEl = document.getElementById('drawer-status');
     statusEl.textContent = d.statusText;
     statusEl.className = 'drawer-status ' + d.statusClass;
-    document.getElementById('dw-temp').innerHTML = d.readings.temp.toFixed(1) + '<span class="readout-unit">°C</span>';
-    document.getElementById('dw-sal').innerHTML = d.readings.sal.toFixed(1) + '<span class="readout-unit">psu</span>';
-    document.getElementById('dw-turb').innerHTML = d.readings.turb.toFixed(1) + '<span class="readout-unit">NTU</span>';
-    document.getElementById('dw-ph').textContent = d.readings.ph.toFixed(2);
+    renderReadoutGrid('dw-readings', d.sensors);
     document.getElementById('dw-batt').textContent = d.battery + '%';
     document.getElementById('dw-solar').textContent = d.solar;
     document.getElementById('dw-coords').textContent = d.coords;
@@ -1445,18 +1643,20 @@
   async function selectBuoy(id){
     activeBuoy = id;
     currentBuoyId = id;
+    sensorRangeMinutes = 60;
+    document.querySelectorAll('#range-group-sensors button').forEach(b=> b.classList.toggle('active', b.dataset.minutes === '60'));
     // sidebar highlight
     document.querySelectorAll('#sidebar-sensors .svc-item').forEach(item=>{
       item.classList.toggle('active', item.querySelector('.svc-name').textContent === id);
     });
     // position plot highlight
     document.querySelectorAll('.pos-node').forEach(n=> n.classList.toggle('selected', n.dataset.buoy === id));
-    // update inline chart / readings panel
-    const m = METRICS[currentMetric];
-    document.querySelector('#chart-panel-sensors .panel-title').textContent = `${m.label} - ${id}`;
+    const buoyData = BUOY_DATA[id];
+    const sensorNames = buoyData ? Object.keys(buoyData.sensors) : [];
+    renderMetricTabs(sensorNames);
     document.querySelector('#view-sensors .stats-row .panel-title').textContent = `Current readings - ${id}`;
-    const series = await fetchBuoySeries(id, currentMetric);
-    if(series.length) sensorChart.setData(series, m.max);
+    if(buoyData) renderReadoutGrid('current-readings-grid', buoyData.sensors);
+    if(sensorNames.length) await switchMetric(currentMetric);
     if(typeof resetScrubUI === 'function') resetScrubUI('sensors');
     openDrawer(id);
     navigateHash('sensors', id);
@@ -1538,10 +1738,15 @@
   function buildBuoyPreview(id){
     const d = BUOY_DATA[id];
     if(!d) return '';
+    const sensorNames = Object.keys(d.sensors || {});
+    const firstSensor = sensorNames[0];
+    const sensorRow = firstSensor
+      ? `<div class="hover-preview-row"><span>${prettySensorLabel(firstSensor)}</span><span>${d.sensors[firstSensor].value.toFixed(1)}${d.sensors[firstSensor].unit}</span></div>`
+      : `<div class="hover-preview-row"><span>Sensors</span><span>none</span></div>`;
     return `<div class="hover-preview-name">${id}</div>
       <span class="drawer-status ${d.statusClass}">${d.statusText}</span>
       <div class="hover-preview-row"><span>Battery</span><span>${d.battery}%</span></div>
-      <div class="hover-preview-row"><span>Temp</span><span>${d.readings.temp.toFixed(1)}°C</span></div>
+      ${sensorRow}
       <div class="hover-preview-row"><span>GNSS fix</span><span>${d.fix}</span></div>
       <div class="hover-preview-row"><span>Last contact</span><span>${d.lastContact}</span></div>
       <div class="hover-preview-hint">Click for full detail panel</div>`;
@@ -1912,7 +2117,7 @@
       bearingDeg: drift.bearing,
       lastContact: fmtLastContact(b.last_contact_seconds),
       signal: `${b.signal_dbm} dBm`,
-      readings: { temp: b.temp, sal: b.salinity, turb: b.turbidity, ph: b.ph },
+      sensors: b.sensors,   // { name: {value, unit, simulated}, ... } - heterogeneous per buoy
       events: alerts.filter(a=> a.source === b.id).slice(0, 5).map(a=> ({ t: fmtClock(a.time), msg: a.message })),
     };
   }
@@ -2050,16 +2255,17 @@
       const { services, buoys } = await refreshAll();
       const svc = services.find(s=> s.name === currentServiceName);
       if(svc){
-        if(svcChart.isLive()) svcChart.appendRealPoint(svc.latency_ms);
+        if(svcChart.isLive() && svcRangeMinutes === 60) svcChart.appendRealPoint(svc.latency_ms);
         animateRps(svc.rps);
       }
       const buoy = buoys.find(b=> b.id === currentBuoyId);
       if(buoy){
-        if(sensorChart.isLive()){
-          const apiField = { temp:'temp', sal:'salinity', turb:'turbidity', ph:'ph' }[currentMetric];
-          sensorChart.appendRealPoint(buoy[apiField]);
+        if(sensorChart.isLive() && sensorRangeMinutes === 60 && buoy.sensors[currentMetric]){
+          sensorChart.appendRealPoint(buoy.sensors[currentMetric].value);
+          maybeRescaleAutoMetric();
         }
         animateBattery(Math.round(buoy.battery));
+        if(BUOY_DATA[currentBuoyId]) renderReadoutGrid('current-readings-grid', BUOY_DATA[currentBuoyId].sensors);
         if(activeBuoy === currentBuoyId && drawer.classList.contains('open')) openDrawer(currentBuoyId);
       }
       resetSync();
@@ -2074,6 +2280,7 @@
       const lats = anchorBuoys.map(b=>b.lat), lngs = anchorBuoys.map(b=>b.lng);
       MOORING_ANCHOR = [lats.reduce((a,b)=>a+b,0)/lats.length, lngs.reduce((a,b)=>a+b,0)/lngs.length];
       anchorBuoys.forEach(b=>{ BUOY_LATLNG[b.id] = [b.lat, b.lng]; });
+      if(anchorBuoys.length) currentBuoyId = anchorBuoys[0].id;
 
       const services = await fetchJSON('/api/services');
       currentServiceName = services[0]?.name || currentServiceName;
@@ -2082,10 +2289,14 @@
 
       const svcSeries = await fetchServiceSeries(currentServiceName);
       if(svcSeries.length) svcChart.setData(svcSeries);
+      if(typeof resetScrubUI === 'function') resetScrubUI('services');
       document.querySelector('#chart-panel-services .panel-title').textContent = `Request latency - ${currentServiceName}`;
 
-      const buoySeries = await fetchBuoySeries(currentBuoyId, currentMetric);
-      if(buoySeries.length) sensorChart.setData(buoySeries, METRICS[currentMetric].max);
+      const buoyData = BUOY_DATA[currentBuoyId];
+      const sensorNames = buoyData ? Object.keys(buoyData.sensors) : [];
+      renderMetricTabs(sensorNames);
+      if(buoyData) renderReadoutGrid('current-readings-grid', buoyData.sensors);
+      if(sensorNames.length) await switchMetric(currentMetric);
 
       resetSync();
       setInterval(pollLive, 4000);

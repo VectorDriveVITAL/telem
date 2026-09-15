@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# InfluxDB runtime files
+.influxd-data/
+.influxd.log
+.influxd.pid
+
+# Environments and secrets
+.env
+
+# IDEs and editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# macOS generated files
+.DS_Store
+.AppleDouble
+.LSOverride

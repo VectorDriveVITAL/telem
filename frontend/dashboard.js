@@ -427,8 +427,8 @@ class TelemetryChart {
     for (const fresh of this.svg.querySelectorAll(".chart-trace")) {
       const old = oldPaths.get(fresh.dataset.series);
       const target = fresh.getAttribute("d");
-      if (!old || reducedMotion.matches) {
-        if (!reducedMotion.matches && target)
+      if (!old || reducedMotion.matches || this.scrubbing) {
+        if (!reducedMotion.matches && !this.scrubbing && target)
           fresh.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400 });
         continue;
       }
@@ -482,7 +482,9 @@ class TelemetryChart {
       (this.bounds.end - this.bounds.start) * this.fraction(e);
     const candidates = this.data
       .map((series) => {
-        const points = series.points;
+        const points = series.points.filter(
+          (p) => p.time >= this.bounds.start && p.time <= this.bounds.end,
+        );
         let lo = 0,
           hi = points.length;
         while (lo < hi) {
@@ -540,14 +542,14 @@ const charts = {
 };
 
 const historyCache = new Map();
-async function fetchHistory(kind, source, metrics, range) {
+async function fetchHistory(kind, source, metrics, range, buckets = 240) {
   const query = new URLSearchParams({
     metrics: metrics.join(","),
     start: new Date(range.start).toISOString(),
     end: new Date(range.end).toISOString(),
     aggregation: "mean",
     interval_seconds: String(
-      Math.max(1, Math.ceil((range.end - range.start) / 240000)),
+      Math.max(1, Math.ceil((range.end - range.start) / (buckets * 1000))),
     ),
   });
   const key = `/api/${kind === "service" ? "services" : "buoys"}/${enc(source)}/timeseries?${query}`;
@@ -617,6 +619,7 @@ function sensorLimits(sensor) {
     .map((k) => ({ value: sensor.rules[k], label: k.replace("_", " ") }));
 }
 async function loadChart(scope) {
+  if (charts[scope].scrubbing) return;
   const seq = ++S.historySeq[scope],
     range = activeWindow(scope);
   const source = S.selected[scope];
@@ -678,6 +681,17 @@ async function loadChart(scope) {
     );
     return;
   }
+  const span = range.end - range.start;
+  const replayEnd = S.windows[scope]
+    ? charts[scope].replayEnd || range.end
+    : range.end;
+  const preload = {
+    start: Math.max(
+      replayEnd - 31 * 86400000,
+      Math.min(range.start, replayEnd - span * 4),
+    ),
+    end: Math.max(range.end, replayEnd),
+  };
   const kind = scope === "services" ? "service" : "buoy",
     metric = scope === "services" ? "latency_ms" : S.metric;
   const main = scope === "services" ? getService(source) : getBuoy(source);
@@ -709,7 +723,7 @@ async function loadChart(scope) {
           index === 0
             ? [...new Set([metric, scope === "services" ? "rps" : "battery"])]
             : [metric];
-        const result = await fetchHistory(kind, id, metrics, range);
+        const result = await fetchHistory(kind, id, metrics, preload, 960);
         interval = result.interval_seconds;
         return {
           ...readingSeries(result, metric, id, unit, colors[index]),
@@ -739,6 +753,7 @@ async function loadChart(scope) {
       .map((a) => ({ time: a.time, label: a.message })),
   );
   if (seq !== S.historySeq[scope]) return;
+  charts[scope].replayEnd = replayEnd;
   charts[scope].set(series, activeWindow(scope), { events, limits, interval });
   const sparkMetric = scope === "services" ? "rps" : "battery";
   const sparkPoints =
@@ -2095,16 +2110,39 @@ for (const scope of ["services", "sensors"]) {
   slider.value = 1000;
   slider.setAttribute("aria-label", "Replay through recent history");
   slider.addEventListener("input", () => {
-    const end =
-      Date.now() -
-      (1 - Number(slider.value) / 1000) * S.minutes[scope] * 60000 * 3;
-    setWindow(
-      scope,
-      slider.value === "1000"
-        ? null
-        : { start: end - S.minutes[scope] * 60000, end },
+    const chart = charts[scope];
+    chart.scrubbing = true;
+    ++S.historySeq[scope]; // A slow earlier response must not replace the replay buffer.
+    const anchor = chart.replayEnd || Date.now();
+    const span = S.minutes[scope] * 60000;
+    const end = anchor - (1 - Number(slider.value) / 1000) * span * 3;
+    S.windows[scope] =
+      slider.value === "1000" ? null : { start: end - span, end };
+    chart.bounds = { start: end - span, end };
+    // No request, debounce or morph: the viewport tracks the thumb each frame.
+    cancelAnimationFrame(chart.scrubFrame);
+    chart.scrubFrame = requestAnimationFrame(() => chart.render());
+    const live = slider.value === "1000";
+    setText(
+      "scrub-status-" + scope,
+      live ? "● LIVE" : "REPLAY · " + shortTime(end),
+    );
+    $("scrub-status-" + scope).classList.toggle("live", live);
+    $("replay-banner-" + scope).classList.toggle("show", !live);
+    setText(
+      "chart-sub-" + scope,
+      `${timestamp(end - span)} – ${timestamp(end)}`,
     );
   });
+  const finishScrub = () => {
+    // Finish the pending direct render before enabling live-update animations.
+    requestAnimationFrame(() => {
+      charts[scope].scrubbing = false;
+    });
+  };
+  slider.addEventListener("change", finishScrub);
+  slider.addEventListener("blur", finishScrub);
+  slider.addEventListener("pointercancel", finishScrub);
   $("compare-toggle-" + scope).addEventListener("click", () => {
     S.comparing[scope] = !S.comparing[scope];
     $("compare-toggle-" + scope).classList.toggle("active", S.comparing[scope]);

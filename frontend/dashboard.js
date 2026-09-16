@@ -340,8 +340,15 @@ class TelemetryChart {
       let d = "",
         connected = false,
         previous = null,
-        last = null;
-      const valid = series.points.filter((p) => p.value !== null);
+        last = null,
+        segmentLength = 0;
+      const isolated = [];
+      const finishSegment = () => {
+        if (segmentLength === 1 && last) isolated.push(last);
+        segmentLength = 0;
+        connected = false;
+      };
+      const valid = series.points.filter((p) => Number.isFinite(p.value));
       const deltas = valid
         .slice(1)
         .map((p, i) => new Date(p.time) - new Date(valid[i].time))
@@ -352,21 +359,34 @@ class TelemetryChart {
         this.interval * 2500,
         deltas.length ? deltas[Math.floor(deltas.length / 2)] * 3 : Infinity,
       );
-      for (const point of series.points) {
+      // Nulls represent unaligned fields, not explicit outage markers.
+      for (const [pointIndex, point] of valid.entries()) {
         const t = +new Date(point.time);
-        if (point.value === null || !Number.isFinite(point.value)) {
-          connected = false;
-          continue;
-        }
         if (t < this.bounds.start || t > this.bounds.end) continue;
-        if (previous !== null && t - previous > maxGap) connected = false;
+        // Seed and live samples can have different cadences in the same window.
+        // Use the surrounding intervals without allowing one long outage to
+        // inflate its own threshold.
+        const before =
+          pointIndex > 1
+            ? valid[pointIndex - 1].time - valid[pointIndex - 2].time
+            : maxGap / 3;
+        const after =
+          pointIndex + 1 < valid.length
+            ? valid[pointIndex + 1].time - t
+            : maxGap / 3;
+        const localGap = Math.max(maxGap, Math.min(before, after) * 3);
+        if (previous !== null && t - previous > localGap) finishSegment();
         const x = this.x(t),
           y = this.y(point.value, index);
         d += `${connected ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
         connected = true;
         previous = t;
         last = { x, y };
+        segmentLength++;
       }
+      finishSegment();
+      for (const point of isolated)
+        svg += `<circle class="chart-sample" cx="${point.x}" cy="${point.y}" r="2.2" fill="${series.color || colors[index % colors.length]}"/>`;
       svg += `<path class="chart-trace" data-series="${esc(series.name)}" stroke="${series.color || colors[index % colors.length]}" d="${d}"/>`;
       if (last)
         svg += `<circle cx="${last.x}" cy="${last.y}" r="2.6" fill="${series.color || colors[index % colors.length]}"/>`;
@@ -383,6 +403,7 @@ class TelemetryChart {
         p,
       ]),
     );
+    for (const path of oldPaths.values()) cancelAnimationFrame(path._frame);
     this.svg.innerHTML = svg;
     for (const fresh of this.svg.querySelectorAll(".chart-trace")) {
       const old = oldPaths.get(fresh.dataset.series);
@@ -851,7 +872,7 @@ async function selectSource(kind, id, open = true) {
   $("scrub-range-" + scope).value = "1000";
   if (scope === "sensors") {
     const b = getBuoy(id);
-    if (!(S.metric in b.sensors))
+    if (!(S.metric in b.sensors) && !(S.metric in b.field_metadata))
       S.metric = Object.keys(b.sensors)[0] || "battery";
   }
   switchTab(scope, true, false);
@@ -972,7 +993,9 @@ function renderReadouts() {
     setText("rps-num", "—");
   }
   if (b) {
-    const metrics = Object.keys(b.sensors);
+    const metrics = [
+      ...new Set([...Object.keys(b.sensors), ...Object.keys(b.field_metadata)]),
+    ];
     if (!metrics.includes(S.metric) && S.metric !== "battery")
       S.metric = metrics[0] || "battery";
     $("metric-select").innerHTML = (metrics.length ? metrics : ["battery"])

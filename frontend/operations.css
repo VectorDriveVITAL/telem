@@ -871,3 +871,17 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Keep every registered metric reachable at desktop and mobile widths. */
+.metric-select {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+#chart-panel-sensors .panel-head {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+#chart-panel-sensors .panel-head > div:last-child {
+  flex-wrap: wrap;
+  min-width: 0;
+}

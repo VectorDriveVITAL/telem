@@ -34,6 +34,92 @@ const path = require("node:path");
       .locator("#overview-cards .overview-card")
       .first()
       .waitFor({ state: "attached" });
+    for (const label of [
+      "Overview",
+      "Service health",
+      "Sensor telemetry",
+      "Incidents",
+      "Analysis",
+    ]) {
+      assert.equal(
+        await page.getByRole("button", { name: label, exact: true }).count(),
+        1,
+      );
+    }
+    assert.equal(
+      await page
+        .getByRole("heading", { name: "Fleet overview", exact: true })
+        .count(),
+      1,
+    );
+    const dashboard = fs.readFileSync(
+      path.join(__dirname, "../frontend/dashboard.js"),
+      "utf8",
+    );
+    const chartClass = dashboard.slice(
+      dashboard.indexOf("class TelemetryChart"),
+      dashboard.indexOf("const charts ="),
+    );
+    const sparse = await page.evaluate(async (source) => {
+      const host = document.createElement("div");
+      host.style.cssText =
+        "width:800px;position:absolute;top:0;left:0;visibility:hidden";
+      host.innerHTML =
+        '<svg id="chart-regression" style="width:800px"></svg><div id="tooltip-regression"></div>';
+      document.body.append(host);
+      const Chart = new Function(
+        "$",
+        "esc",
+        "colors",
+        "reducedMotion",
+        "number",
+        "timestamp",
+        `return (${source})`,
+      )(
+        (id) => document.getElementById(id),
+        String,
+        ["red"],
+        { matches: true },
+        String,
+        String,
+      );
+      const chart = new Chart("regression");
+      const end = Date.now(),
+        points = [];
+      // A sparse seed followed by dense live samples; aligned nulls are not outages.
+      for (let i = 0; i < 20; i++)
+        points.push({ time: end - 3600000 + i * 60000, value: 10 + i });
+      points.push({ time: end - 900000, value: 12 });
+      for (let i = 0; i < 100; i++) {
+        points.push({ time: end - 300000 + i * 3000, value: 20 + i / 10 });
+        points.push({ time: end - 300000 + i * 3000 + 1000, value: null });
+      }
+      chart.set(
+        [{ name: "sparse", points }],
+        { start: end - 3600000, end },
+        { interval: 3 },
+      );
+      const check = () => ({
+        dots: host.querySelectorAll(".chart-sample").length,
+        lines: (
+          host.querySelector(".chart-trace").getAttribute("d").match(/L/g) || []
+        ).length,
+      });
+      const before = check();
+      chart.bounds = { start: end - 7200000, end };
+      chart.render();
+      const after = check();
+      host.remove();
+      return { before, after };
+    }, chartClass);
+    assert(
+      sparse.before.dots >= 1 && sparse.after.dots >= 1,
+      "isolated readings must stay visible when zooming out",
+    );
+    assert(
+      sparse.before.lines >= 116 && sparse.after.lines >= 116,
+      "aligned nulls must not erase valid traces",
+    );
     await page.screenshot({
       path: path.join(output, "overview.png"),
       fullPage: true,
@@ -56,6 +142,20 @@ const path = require("node:path");
       )
       .click();
     await page.locator("#buoy-drawer.open").waitFor();
+    const metricTabs = await page
+      .locator("#metric-select [data-metric]")
+      .evaluateAll((tabs) => tabs.map((tab) => tab.dataset.metric));
+    for (const metric of [
+      "temp",
+      "battery",
+      "solar_watts",
+      "signal_dbm",
+      "satellites",
+      "lat",
+      "lng",
+    ])
+      assert(metricTabs.includes(metric), `missing metric tab: ${metric}`);
+
     await page
       .getByRole("button", { name: "Edit limits", exact: true })
       .click();

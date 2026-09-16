@@ -478,16 +478,16 @@
 
   <div class="view-container">
     <div class="view active" id="view-overview"><main>
-      <div class="overview-heading"><div><div class="eyebrow">FLEET OPERATIONS</div><h1>Every signal. One place.</h1><p class="muted">Prioritize attention, investigate a reading, and keep a record of what changed.</p></div><button class="action" data-action="refresh">Refresh now</button></div>
+      <div class="overview-heading"><div><h1>Fleet overview</h1></div><button class="action" data-action="refresh">Refresh now</button></div>
       <div id="overview-cards" class="overview-cards"></div>
       <div class="overview-grid">
         <section class="panel"><div class="panel-head"><div><div class="panel-title">Needs attention</div><div class="panel-sub" id="overview-summary">Connecting…</div></div><button class="action" data-action="clear-filter">Show all</button></div><div id="urgent-sources"></div></section>
         <section class="panel"><div class="panel-head"><div class="panel-title">Recent activity</div></div><div id="overview-activity"></div></section>
       </div>
-      <div class="panel overview-help"><strong>Start with a source.</strong><span>Select a buoy for readings and limits, open Analysis for power and signal comparisons, or use ⌘K / Ctrl+K to find any registered source.</span></div>
+      <div class="panel overview-help"><strong>Navigation</strong><span>Select a buoy for readings and limits, open Analysis for power and signal comparisons, or use ⌘K / Ctrl+K to find any registered source.</span></div>
     </main></div>
     <div class="view" id="view-analysis"><main>
-      <div class="overview-heading"><div><div class="eyebrow">INVESTIGATE</div><h1>Follow the signals.</h1><p class="muted">Overlay recorded measurements and maintenance events on the same timeline.</p></div></div>
+      <div class="overview-heading"><div><h1>Telemetry analysis</h1><p class="muted">Overlay recorded measurements and maintenance events on the same timeline.</p></div></div>
       <section class="panel"><div class="panel-head analysis-controls"><label>Buoy<select id="analysis-buoy"></select></label><label>Window<select id="analysis-range"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label><label>Scale<select id="analysis-scale"><option value="normalized">Each metric, 0–100%</option><option value="shared">Shared numeric axis</option></select></label><button class="action" data-action="analysis-export">Export CSV</button><button class="action" data-action="analysis-live">Return to live</button></div>
       <div class="metric-checks" id="analysis-metrics"></div><div class="chart-wrap analysis-chart" id="wrap-analysis"><svg id="chart-analysis" class="chart"></svg><div class="tooltip mono" id="tooltip-analysis"></div></div><div id="analysis-summary" class="analysis-summary"></div><div class="chart-note">Hover to see original values and units. Dashed markers are maintenance events. Wheel or drag to inspect a time window.</div></section>
       <section class="panel"><div class="panel-head"><div class="panel-title">Maintenance in this window</div><button class="action" data-action="analysis-maintenance">Log work</button></div><div id="analysis-events"></div></section>

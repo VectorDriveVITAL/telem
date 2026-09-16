@@ -568,3 +568,14 @@ resetting registrations, incidents, settings or latest readings. Real fields are
 excluded. A durable per-field marker prevents repeated seeding at the same horizon.
 `SEED_DEMO=false` disables backfill, and an explicit `HISTORY_MINUTES` overrides
 the default; change an old `HISTORY_MINUTES=240` in your `.env` to `1440`.
+
+### Dashboard regression coverage
+
+The browser suite checks that Overview, Service health, Sensor telemetry,
+Incidents and Analysis remain available. Sensor telemetry and Analysis both
+expose the selected buoy's registered probes plus battery, solar, signal,
+satellites and coordinates. Metric buttons wrap on smaller screens.
+Sparse seed samples and dense live samples retain their traces during zoom;
+isolated samples render as dots and absent values from other metrics do not
+interrupt a valid trace. Regression checks also cover animations, comparison
+controls, replay, exports, maintenance and incident workflows.

@@ -106,6 +106,51 @@ const path = require("node:path");
       path: path.join(output, "analysis.png"),
       fullPage: true,
     });
+    // A wheel burst previews immediately, retains trace nodes, and coalesces I/O.
+    let zoomRequests = 0;
+    const countZoom = (request) => {
+      const url = new URL(request.url());
+      if (
+        url.pathname.endsWith(`/buoys/${source}/timeseries`) &&
+        new Date(url.searchParams.get("end")) -
+          new Date(url.searchParams.get("start")) <
+          3599000
+      )
+        zoomRequests++;
+    };
+    page.on("request", countZoom);
+    const zoomCheck = await page.evaluate(async () => {
+      const svg = document.querySelector("#chart-analysis");
+      const trace = svg.querySelector(".chart-trace");
+      const rect = svg.getBoundingClientRect();
+      const initial = trace.getAttribute("d");
+      const started = performance.now();
+      for (let i = 0; i < 5; i++)
+        svg.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: -10,
+            clientX: rect.right - 20,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      const dispatchMs = performance.now() - started;
+      await new Promise((r) => setTimeout(r, 80));
+      return {
+        retained: trace === svg.querySelector(".chart-trace"),
+        changed: initial !== trace.getAttribute("d"),
+        dispatchMs,
+      };
+    });
+    assert(zoomCheck.retained, "zoom must retain chart trace nodes");
+    assert(zoomCheck.changed, "zoom should preview before its network request");
+    assert(zoomCheck.dispatchMs < 200, "wheel burst blocked the UI");
+    await page.waitForTimeout(700);
+    await page
+      .getByRole("button", { name: "Return to live", exact: true })
+      .click();
+    await page.waitForTimeout(500);
+    console.log("Chart interaction:", zoomCheck);
     // Zoom is reflected in export's exact time range.
     const before = await page.locator("#chart-analysis").boundingBox();
     await page.mouse.move(

@@ -846,3 +846,28 @@ body {
   gap: 8px;
   padding-top: 10px;
 }
+
+/* Native transitions keep interaction fluid without external animation scripts. */
+.chart-tooltip,
+.tooltip {
+  transition: opacity 140ms ease;
+}
+.action,
+.svc-item,
+.panel {
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.action:active {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

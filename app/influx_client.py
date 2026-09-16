@@ -84,10 +84,11 @@ def query_rows(
     # JSON string quoting is also valid Flux string quoting; no identifiers from
     # the request are interpolated as executable Flux expressions.
     q = json.dumps
+    field_filter = " or ".join(f"r._field == {q(field)}" for field in fields)
     flux = f"""from(bucket: {q(settings.influx_bucket)})
       |> range(start: time(v: {q(start.isoformat())}), stop: time(v: {q(end.isoformat())}))
       |> filter(fn: (r) => r._measurement == {q(measurement)} and r[{q(tag_key)}] == {q(tag_value)})
-      |> filter(fn: (r) => contains(value: r._field, set: {q(fields)}))
+      |> filter(fn: (r) => ({field_filter}))
       |> group(columns: ["_field"])
     """
     if aggregation != "raw":

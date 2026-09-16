@@ -537,3 +537,19 @@ Chromium binary.
 through the API or dashboard, supply a display unit, and configure sensor rules.
 The sidebar, map, command palette, chart selectors and Analysis discover them
 from the API; no client-side sensor list needs editing.
+
+### Chart responsiveness and motion
+
+Chart updates morph compatible traces over 420 ms and crossfade when samples or
+series change. Tab panels and throughput/battery readouts animate too. Motion
+respects the operating system's reduced-motion setting. Wheel zoom previews
+loaded readings immediately and batches a scroll gesture into one history request
+after 140 ms of inactivity. Scale changes use the loaded data without a request.
+Identical history requests share an in-flight response and a bounded four-second
+cache; failed requests are never cached. New source selections issue one history
+load, with maintenance and drawer loading in parallel. Influx field filters use
+explicit equality predicates so storage filtering can be pushed down.
+
+The browser test checks trace retention, immediate zoom preview, one request per
+wheel burst, reduced motion, and the existing operational workflows. Its local
+interaction timing is a smoke check, not a guarantee of database or network latency.

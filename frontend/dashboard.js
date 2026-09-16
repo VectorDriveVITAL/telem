@@ -104,8 +104,34 @@ function toast(message) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => ($("toast").style.display = "none"), 5000);
 }
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const numberFrames = new WeakMap();
 function setText(id, value) {
-  if ($(id)) $(id).textContent = value;
+  const el = $(id);
+  if (!el || el.textContent === String(value)) return;
+  const previous = Number(el.textContent.replace(/[, %]/g, ""));
+  const next = Number(String(value).replace(/[, %]/g, ""));
+  cancelAnimationFrame(numberFrames.get(el));
+  if (
+    !["rps-num", "batt-num"].includes(id) ||
+    reducedMotion.matches ||
+    !Number.isFinite(previous) ||
+    !Number.isFinite(next)
+  ) {
+    el.textContent = value;
+    return;
+  }
+  const start = performance.now();
+  const frame = (now) => {
+    const t = Math.min(1, (now - start) / 650);
+    el.textContent =
+      t === 1
+        ? value
+        : number(previous + (next - previous) * (1 - (1 - t) ** 3)) +
+          (String(value).endsWith("%") ? "%" : "");
+    if (t < 1) numberFrames.set(el, requestAnimationFrame(frame));
+  };
+  numberFrames.set(el, requestAnimationFrame(frame));
 }
 function sourceButton(kind, source, label = "Inspect") {
   return `<button class="action" data-action="inspect" data-kind="${kind}" data-source="${esc(source)}">${label}</button>`;
@@ -124,9 +150,18 @@ function activeWindow(scope) {
     }
   );
 }
+const zoomTimers = {};
 function setWindow(scope, range) {
   S.windows[scope] = range;
-  loadChart(scope).catch((e) => toast(e.message));
+  // Preview already loaded samples immediately; only query the settled gesture.
+  ++S.historySeq[scope];
+  charts[scope].bounds = range;
+  charts[scope].render();
+  clearTimeout(zoomTimers[scope]);
+  zoomTimers[scope] = setTimeout(
+    () => loadChart(scope).catch((e) => toast(e.message)),
+    140,
+  );
 }
 
 class TelemetryChart {
@@ -146,6 +181,7 @@ class TelemetryChart {
     this.svg.addEventListener("mousemove", (e) => this.hover(e));
     this.svg.addEventListener("mouseleave", () => {
       this.tooltip.style.opacity = 0;
+      this.svg.querySelector(".chart-crosshair")?.setAttribute("opacity", "0");
     });
     this.svg.addEventListener(
       "wheel",
@@ -177,7 +213,13 @@ class TelemetryChart {
     this.svg.addEventListener("pointercancel", () => {
       this.drag = null;
     });
-    new ResizeObserver(() => this.render()).observe(this.svg);
+    new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      if (width > 0 && Math.abs(width - (this.width || 0)) > 1) {
+        cancelAnimationFrame(this.resizeFrame);
+        this.resizeFrame = requestAnimationFrame(() => this.render());
+      }
+    }).observe(this.svg);
   }
   fraction(e) {
     const r = this.svg.getBoundingClientRect();
@@ -200,7 +242,10 @@ class TelemetryChart {
     });
   }
   set(data, bounds, options = {}) {
-    this.data = data;
+    this.data = data.map((series) => ({
+      ...series,
+      points: series.points.map((p) => ({ ...p, time: +new Date(p.time) })),
+    }));
     this.bounds = bounds;
     this.events = options.events || [];
     this.limits = options.limits || [];
@@ -209,6 +254,7 @@ class TelemetryChart {
     this.render();
   }
   render() {
+    if (!this.svg.getBoundingClientRect().width) return;
     this.width = Math.max(280, this.svg.getBoundingClientRect().width || 600);
     this.height = this.scope === "analysis" ? 300 : 230;
     this.left = 52;
@@ -325,26 +371,96 @@ class TelemetryChart {
       if (last)
         svg += `<circle cx="${last.x}" cy="${last.y}" r="2.6" fill="${series.color || colors[index % colors.length]}"/>`;
     });
-    svg += "</g>";
+    svg += `</g><line class="chart-crosshair" opacity="0" stroke="var(--text-low)" stroke-dasharray="3 3" y1="${this.top}" y2="${this.bottom}" pointer-events="none"/>`;
     if (!all.length)
       svg += `<text class="chart-empty" x="${W / 2}" y="${H / 2}" text-anchor="middle">No recorded readings in this window</text>`;
     this.svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     this.svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    // Retain trace nodes: morph compatible paths, crossfade topology changes.
+    const oldPaths = new Map(
+      [...this.svg.querySelectorAll(".chart-trace")].map((p) => [
+        p.dataset.series,
+        p,
+      ]),
+    );
     this.svg.innerHTML = svg;
+    for (const fresh of this.svg.querySelectorAll(".chart-trace")) {
+      const old = oldPaths.get(fresh.dataset.series);
+      const target = fresh.getAttribute("d");
+      if (!old || reducedMotion.matches) {
+        if (!reducedMotion.matches && target)
+          fresh.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400 });
+        continue;
+      }
+      cancelAnimationFrame(old._frame);
+      const from = old.getAttribute("d") || "";
+      const topology = (d) => d.replace(/-?\d+(?:\.\d+)?/g, "#");
+      old.setAttribute("stroke", fresh.getAttribute("stroke"));
+      fresh.replaceWith(old);
+      if (from === target) continue;
+      if (from && topology(from) === topology(target)) {
+        const a = from.match(/-?\d+(?:\.\d+)?/g).map(Number);
+        const b = target.match(/-?\d+(?:\.\d+)?/g).map(Number);
+        const start = performance.now();
+        const frame = (now) => {
+          const t = Math.min(1, (now - start) / 420),
+            ease = 1 - (1 - t) ** 3;
+          let i = 0;
+          old.setAttribute(
+            "d",
+            t === 1
+              ? target
+              : target.replace(/-?\d+(?:\.\d+)?/g, () => {
+                  const n = a[i] + (b[i] - a[i]) * ease;
+                  i++;
+                  return n.toFixed(2);
+                }),
+          );
+          if (t < 1) old._frame = requestAnimationFrame(frame);
+        };
+        old._frame = requestAnimationFrame(frame);
+      } else {
+        const ghost = old.cloneNode();
+        ghost.removeAttribute("data-series");
+        ghost.classList.remove("chart-trace");
+        ghost.style.fill = "none";
+        ghost.style.strokeWidth = "1.8";
+        old.before(ghost);
+        const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 250,
+        });
+        fade.onfinish = () => ghost.remove();
+        old.setAttribute("d", target);
+        old.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300 });
+      }
+    }
   }
   hover(e) {
     if (!this.data.length) return;
     const target =
       this.bounds.start +
       (this.bounds.end - this.bounds.start) * this.fraction(e);
-    const candidates = this.data.flatMap((s) =>
-      s.points.filter((p) => p.value !== null),
-    );
+    const candidates = this.data
+      .map((series) => {
+        const points = series.points;
+        let lo = 0,
+          hi = points.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (points[mid].time < target) lo = mid + 1;
+          else hi = mid;
+        }
+        let left = lo - 1,
+          right = lo;
+        while (left >= 0 && !Number.isFinite(points[left].value)) left--;
+        while (right < points.length && !Number.isFinite(points[right].value))
+          right++;
+        return [points[left], points[right]].filter(Boolean);
+      })
+      .flat();
     if (!candidates.length) return;
     const nearest = candidates.reduce((a, b) =>
-      Math.abs(new Date(a.time) - target) < Math.abs(new Date(b.time) - target)
-        ? a
-        : b,
+      Math.abs(a.time - target) < Math.abs(b.time - target) ? a : b,
     );
     const t = +new Date(nearest.time);
     const rows = this.data
@@ -363,6 +479,10 @@ class TelemetryChart {
       )
       .map((event) => `<div>${esc(event.label)}</div>`)
       .join("");
+    const crosshair = this.svg.querySelector(".chart-crosshair");
+    crosshair?.setAttribute("x1", this.x(t));
+    crosshair?.setAttribute("x2", this.x(t));
+    crosshair?.setAttribute("opacity", "0.7");
     this.tooltip.innerHTML = `<div class="t-time">${esc(timestamp(nearest.time))}</div>${rows}${nearby}`;
     this.tooltip.style.opacity = 1;
     this.tooltip.style.top = "26px";
@@ -379,6 +499,7 @@ const charts = {
   analysis: new TelemetryChart("analysis"),
 };
 
+const historyCache = new Map();
 async function fetchHistory(kind, source, metrics, range) {
   const query = new URLSearchParams({
     metrics: metrics.join(","),
@@ -389,9 +510,26 @@ async function fetchHistory(kind, source, metrics, range) {
       Math.max(1, Math.ceil((range.end - range.start) / 240000)),
     ),
   });
-  return api(
-    `/api/${kind === "service" ? "services" : "buoys"}/${enc(source)}/timeseries?${query}`,
+  const key = `/api/${kind === "service" ? "services" : "buoys"}/${enc(source)}/timeseries?${query}`;
+  const cached = historyCache.get(key);
+  if (cached && (cached.pending || Date.now() - cached.time < 4000))
+    return cached.promise;
+  const entry = { time: Date.now(), pending: true };
+  entry.promise = api(key).then(
+    (result) => {
+      entry.pending = false;
+      entry.time = Date.now();
+      return result;
+    },
+    (error) => {
+      historyCache.delete(key);
+      throw error;
+    },
   );
+  historyCache.set(key, entry);
+  if (historyCache.size > 48)
+    historyCache.delete(historyCache.keys().next().value);
+  return entry.promise;
 }
 async function maintenanceFor(id, force = false) {
   if (force || !S.maintenance[id])
@@ -510,34 +648,38 @@ async function loadChart(scope) {
   const ids = [source, ...S.compare[scope]].filter(
     (id, i, arr) => arr.indexOf(id) === i,
   );
-  const results = await Promise.all(
-    ids.map(async (id, index) => {
-      const b = scope === "sensors" ? getBuoy(id) : null;
-      if (
-        scope === "sensors" &&
-        (!b || (!(metric in b.sensors) && !(metric in b.field_metadata)))
-      )
-        return null;
-      const unit =
-        scope === "services"
-          ? "ms"
-          : b.sensors[metric]?.unit || b.field_metadata[metric]?.unit || "";
-      if (unit !== selectedUnits) return null;
-      const metrics =
-        index === 0
-          ? [...new Set([metric, scope === "services" ? "rps" : "battery"])]
-          : [metric];
-      const result = await fetchHistory(kind, id, metrics, range);
-      interval = result.interval_seconds;
-      return {
-        ...readingSeries(result, metric, id, unit, colors[index]),
-        related: result,
-      };
-    }),
-  );
+  const maintenanceRequest =
+    scope === "sensors" ? maintenanceFor(source) : Promise.resolve([]);
+  const [maintenance, results] = await Promise.all([
+    maintenanceRequest,
+    Promise.all(
+      ids.map(async (id, index) => {
+        const b = scope === "sensors" ? getBuoy(id) : null;
+        if (
+          scope === "sensors" &&
+          (!b || (!(metric in b.sensors) && !(metric in b.field_metadata)))
+        )
+          return null;
+        const unit =
+          scope === "services"
+            ? "ms"
+            : b.sensors[metric]?.unit || b.field_metadata[metric]?.unit || "";
+        if (unit !== selectedUnits) return null;
+        const metrics =
+          index === 0
+            ? [...new Set([metric, scope === "services" ? "rps" : "battery"])]
+            : [metric];
+        const result = await fetchHistory(kind, id, metrics, range);
+        interval = result.interval_seconds;
+        return {
+          ...readingSeries(result, metric, id, unit, colors[index]),
+          related: result,
+        };
+      }),
+    ),
+  ]);
   series = results.filter(Boolean);
   if (scope === "sensors") {
-    const maintenance = await maintenanceFor(source);
     events = maintenance
       .filter((m) => !m.sensor || m.sensor === metric)
       .map((m) => ({
@@ -608,11 +750,12 @@ function setTheme(theme) {
   });
   if (tiles) tiles.setUrl(tileURL());
 }
-function switchTab(tab, updateHash = true) {
+function switchTab(tab, updateHash = true, load = true) {
   if (
     !["overview", "services", "sensors", "incidents", "analysis"].includes(tab)
   )
     return;
+  const changed = S.tab !== tab;
   S.tab = tab;
   document
     .querySelectorAll(".view")
@@ -626,7 +769,25 @@ function switchTab(tab, updateHash = true) {
       map?.invalidateSize();
     });
   }
-  if (charts[tab]) loadChart(tab).catch((e) => toast(e.message));
+  if (changed && !reducedMotion.matches) {
+    document
+      .querySelectorAll(`#view-${tab} .panel, #view-${tab} .svc-item`)
+      .forEach((el, i) => {
+        el.animate(
+          [
+            { opacity: 0, transform: "translateY(10px)" },
+            { opacity: 1, transform: "translateY(0)" },
+          ],
+          {
+            duration: 350,
+            delay: Math.min(i, 6) * 30,
+            easing: "cubic-bezier(.2,.8,.2,1)",
+            fill: "backwards",
+          },
+        );
+      });
+  }
+  if (load && charts[tab]) loadChart(tab).catch((e) => toast(e.message));
   if (updateHash) writeHash();
 }
 function writeHash() {
@@ -693,12 +854,14 @@ async function selectSource(kind, id, open = true) {
     if (!(S.metric in b.sensors))
       S.metric = Object.keys(b.sensors)[0] || "battery";
   }
-  switchTab(scope);
+  switchTab(scope, true, false);
   renderSources();
   renderReadouts();
   writeHash();
-  await loadChart(scope);
-  if (scope === "sensors" && open) await openDrawer(id);
+  await Promise.all([
+    loadChart(scope),
+    scope === "sensors" && open ? openDrawer(id) : Promise.resolve(),
+  ]);
 }
 function filtered(scope) {
   const term = $("filter-" + scope).value.toLowerCase(),
@@ -1948,9 +2111,10 @@ $("analysis-range").addEventListener("change", () => {
   S.windows.analysis = null;
   loadChart("analysis").catch((e) => toast(e.message));
 });
-$("analysis-scale").addEventListener("change", () =>
-  loadChart("analysis").catch((e) => toast(e.message)),
-);
+$("analysis-scale").addEventListener("change", () => {
+  charts.analysis.normalized = $("analysis-scale").value === "normalized";
+  charts.analysis.render();
+});
 $("analysis-metrics").addEventListener("change", (e) => {
   if (e.target.checked) S.analysisMetrics.add(e.target.value);
   else S.analysisMetrics.delete(e.target.value);

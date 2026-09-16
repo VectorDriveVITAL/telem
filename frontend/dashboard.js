@@ -150,18 +150,37 @@ function activeWindow(scope) {
     }
   );
 }
-const zoomTimers = {};
+const windowLoads = {};
 function setWindow(scope, range) {
   S.windows[scope] = range;
-  // Preview already loaded samples immediately; only query the settled gesture.
-  ++S.historySeq[scope];
-  charts[scope].bounds = range;
-  charts[scope].render();
-  clearTimeout(zoomTimers[scope]);
-  zoomTimers[scope] = setTimeout(
-    () => loadChart(scope).catch((e) => toast(e.message)),
-    140,
-  );
+  const pending = (windowLoads[scope] ||= {
+    busy: false,
+    timer: null,
+    dirty: false,
+  });
+  pending.dirty = true;
+  charts[scope].bounds = activeWindow(scope);
+  cancelAnimationFrame(pending.frame);
+  pending.frame = requestAnimationFrame(() => charts[scope].render());
+  scheduleWindowLoad(scope);
+}
+function scheduleWindowLoad(scope) {
+  const pending = windowLoads[scope];
+  if (pending.busy || pending.timer || !pending.dirty) return;
+  // Throttle, rather than debounce: sustained gestures receive data throughout.
+  pending.timer = setTimeout(async () => {
+    pending.timer = null;
+    pending.busy = true;
+    pending.dirty = false;
+    try {
+      await loadChart(scope);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      pending.busy = false;
+      scheduleWindowLoad(scope);
+    }
+  }, 100);
 }
 
 class TelemetryChart {
@@ -639,7 +658,7 @@ async function loadChart(scope) {
       label: pretty(m.kind) + ": " + m.description,
     }));
     if (seq !== S.historySeq[scope]) return;
-    charts[scope].set(series, range, {
+    charts[scope].set(series, activeWindow(scope), {
       events,
       interval,
       normalized: $("analysis-scale").value === "normalized",
@@ -720,7 +739,7 @@ async function loadChart(scope) {
       .map((a) => ({ time: a.time, label: a.message })),
   );
   if (seq !== S.historySeq[scope]) return;
-  charts[scope].set(series, range, { events, limits, interval });
+  charts[scope].set(series, activeWindow(scope), { events, limits, interval });
   const sparkMetric = scope === "services" ? "rps" : "battery";
   const sparkPoints =
     series[0]?.related?.points.map((p) => ({
@@ -2075,15 +2094,16 @@ for (const scope of ["services", "sensors"]) {
   slider.max = 1000;
   slider.value = 1000;
   slider.setAttribute("aria-label", "Replay through recent history");
-  slider.addEventListener("change", () => {
+  slider.addEventListener("input", () => {
     const end =
       Date.now() -
       (1 - Number(slider.value) / 1000) * S.minutes[scope] * 60000 * 3;
-    S.windows[scope] =
+    setWindow(
+      scope,
       slider.value === "1000"
         ? null
-        : { start: end - S.minutes[scope] * 60000, end };
-    loadChart(scope).catch((e) => toast(e.message));
+        : { start: end - S.minutes[scope] * 60000, end },
+    );
   });
   $("compare-toggle-" + scope).addEventListener("click", () => {
     S.comparing[scope] = !S.comparing[scope];

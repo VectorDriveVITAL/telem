@@ -127,6 +127,19 @@ const path = require("node:path");
     await page
       .getByRole("button", { name: "Sensor telemetry", exact: true })
       .click();
+    // Input events happen while the replay thumb is still held; no change/release.
+    const replayResponse = page.waitForResponse(
+      (r) => r.url().includes("/timeseries?") && r.url().includes("/buoys/"),
+    );
+    await page.locator("#scrub-range-sensors").evaluate((slider) => {
+      slider.value = "900";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    assert((await replayResponse).ok(), "replay must fetch before release");
+    await page.locator("#scrub-range-sensors").evaluate((slider) => {
+      slider.value = "1000";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     await page
       .getByRole("button", { name: "+ Register buoy", exact: true })
       .click();

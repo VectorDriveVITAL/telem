@@ -543,14 +543,14 @@ from the API; no client-side sensor list needs editing.
 Chart updates morph compatible traces over 420 ms and crossfade when samples or
 series change. Tab panels and throughput/battery readouts animate too. Motion
 respects the operating system's reduced-motion setting. Wheel zoom previews
-loaded readings immediately and batches a scroll gesture into one history request
-after 140 ms of inactivity. Scale changes use the loaded data without a request.
+loaded readings immediately and refreshes history throughout a scroll gesture with a 100 ms throttle
+and one gesture request in flight per chart. Scale changes use the loaded data without a request.
 Identical history requests share an in-flight response and a bounded four-second
 cache; failed requests are never cached. New source selections issue one history
 load, with maintenance and drawer loading in parallel. Influx field filters use
 explicit equality predicates so storage filtering can be pushed down.
 
-The browser test checks trace retention, immediate zoom preview, one request per
+The browser test checks trace retention, immediate zoom preview, coalesced requests per
 wheel burst, reduced motion, and the existing operational workflows. Its local
 interaction timing is a smoke check, not a guarantee of database or network latency.
 
@@ -579,3 +579,5 @@ Sparse seed samples and dense live samples retain their traces during zoom;
 isolated samples render as dots and absent values from other metrics do not
 interrupt a valid trace. Regression checks also cover animations, comparison
 controls, replay, exports, maintenance and incident workflows.
+
+Replay sliders update on input while dragging, without waiting for release. Cached samples preview each frame; history responses update the current viewport during sustained gestures.

@@ -347,11 +347,11 @@ class TelemetryChart {
         .map((p, i) => new Date(p.time) - new Date(valid[i].time))
         .filter((d) => d > 0)
         .sort((a, b) => a - b);
-      const maxGap = this.interval
-        ? this.interval * 2500
-        : deltas.length
-          ? deltas[Math.floor(deltas.length / 2)] * 3
-          : Infinity;
+      // A requested bucket can be shorter than the source's actual cadence.
+      const maxGap = Math.max(
+        this.interval * 2500,
+        deltas.length ? deltas[Math.floor(deltas.length / 2)] * 3 : Infinity,
+      );
       for (const point of series.points) {
         const t = +new Date(point.time);
         if (point.value === null || !Number.isFinite(point.value)) {

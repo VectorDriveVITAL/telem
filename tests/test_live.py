@@ -137,3 +137,33 @@ def test_power_history_and_service_metric_extension(live):
         }
     finally:
         live.delete(f"/api/services/{name}")
+
+
+@pytest.mark.skipif(
+    os.getenv("HISTORY_MINUTES") != "1440", reason="requires a full-day demo seed"
+)
+def test_demo_history_all_fields_across_chart_windows(live):
+    buoy = next(b for b in live.get("/api/buoys").json() if b["id"] == "buoy-01")
+    metrics = list(buoy["sensors"]) + list(buoy["field_metadata"])
+    for path, fields in [
+        ("/api/buoys/buoy-01/timeseries", metrics),
+        (
+            "/api/services/telemetry-gateway/timeseries",
+            ["latency_ms", "rps", "error_rate"],
+        ),
+    ]:
+        for minutes in (15, 60, 360, 1440):
+            response = live.get(
+                path, params={"metrics": ",".join(fields), "minutes": minutes}
+            )
+            assert response.status_code == 200, response.text
+            history = response.json()
+            for field in fields:
+                samples = [
+                    p for p in history["points"] if p["values"][field] is not None
+                ]
+                assert len(samples) >= 10
+                span = datetime.fromisoformat(
+                    samples[-1]["time"]
+                ) - datetime.fromisoformat(samples[0]["time"])
+                assert span.total_seconds() > minutes * 60 * 0.8

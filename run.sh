@@ -47,7 +47,7 @@ values = dotenv_values('.env')
 defaults = dict(INFLUX_URL='http://localhost:8086', INFLUX_ORG='telem',
     INFLUX_BUCKET='telemetry', INFLUX_TOKEN='dev-super-secret-token',
     INFLUX_USER='admin', INFLUX_PASS='telemetry123', TICK_SECONDS='3',
-    HISTORY_MINUTES='240', CORS_ORIGINS='*', PORT='8000')
+    HISTORY_MINUTES='1440', CORS_ORIGINS='*', PORT='8000')
 for key, default in defaults.items():
     value = os.environ.get(key, values.get(key) or default)
     print('export ' + key + '=' + shlex.quote(value))

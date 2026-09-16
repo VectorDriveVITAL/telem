@@ -9,6 +9,7 @@ identity (source, field, timestamp) and therefore overwrites that sample.
 import asyncio
 import copy
 import functools
+import math
 import random
 import threading
 import time
@@ -370,80 +371,136 @@ def remove_buoy_sensor(buoy_id, sensor):
     _evaluate()
 
 
+def _seed_demo_fields():
+    """Backfill simulated fields once per source/field/horizon, including upgrades.
+
+    Keep restored latest readings and operator state untouched. Real fields are
+    excluded, even on mixed real/demo buoys. Minute-aligned seed timestamps make
+    retrying a failed startup overwrite the same samples rather than duplicate them.
+    """
+    if not settings.seed_demo or settings.history_minutes <= 0:
+        return
+    now = utcnow().replace(second=0, microsecond=0)
+    seeded = _state.setdefault("demo_seeded_fields", {})
+    points = []
+    for kind, registry in [("service", "services"), ("buoy", "buoys")]:
+        for name, state in _state[registry].items():
+            if kind == "service":
+                fields = (
+                    {
+                        "latency_ms": state["latency"],
+                        "rps": state["rps"],
+                        "error_rate": state["error_rate"],
+                    }
+                    if state["simulated"]
+                    else {}
+                )
+            else:
+                fields = {
+                    key: sensor["value"]
+                    for key, sensor in state["sensors"].items()
+                    if sensor["simulated"]
+                }
+                fields.update(
+                    {
+                        key: state[key]
+                        for key, meta in state["field_metadata"].items()
+                        if meta["simulated"]
+                    }
+                )
+            fields = {
+                key: value
+                for key, value in fields.items()
+                if seeded.get(f"{kind}/{name}/{key}", 0) < settings.history_minutes
+            }
+            if not fields:
+                continue
+            rng = random.Random(f"demo-v2/{kind}/{name}")
+            phases = {key: rng.random() * math.tau for key in sorted(fields)}
+            for offset in range(settings.history_minutes, 0, -1):
+                ts = now - timedelta(minutes=offset)
+                hour = ts.hour + ts.minute / 60
+                values = {}
+                for key, base in fields.items():
+                    wave = math.sin(offset / 37 + phases[key]) + 0.35 * math.sin(
+                        offset / 7 + phases[key]
+                    )
+                    noise = rng.uniform(-0.08, 0.08)
+                    if key in {"lat", "lng"}:
+                        value = base + 0.000025 * wave
+                        value = max(
+                            -90 if key == "lat" else -180,
+                            min(90 if key == "lat" else 180, value),
+                        )
+                    elif key == "battery":
+                        value = max(0, min(100, base + 5 * wave))
+                    elif key == "solar_watts":
+                        value = (
+                            max(0, max(1, base) * math.sin(math.pi * (hour - 6) / 12))
+                            if 6 < hour < 18
+                            else 0
+                        )
+                    elif key == "satellites":
+                        value = max(0, round(base + 2 * wave))
+                    elif key == "signal_dbm":
+                        value = min(0, base + 5 * wave)
+                    elif key == "error_rate":
+                        value = max(0, min(100, base + 0.3 + 0.3 * wave))
+                    else:
+                        amplitude = max(abs(base) * 0.08, 0.2)
+                        value = base + amplitude * (wave + noise)
+                        if key in METRIC_RANGES:
+                            lo, hi = METRIC_RANGES[key]
+                            value = max(lo, min(hi, value))
+                        elif key in {"latency_ms", "rps"}:
+                            value = max(0, value)
+                    values[key] = value
+                points.append(
+                    make_point(
+                        "service_metrics" if kind == "service" else "buoy_metrics",
+                        {
+                            kind: name,
+                            "data_source": "simulated",
+                        },
+                        values,
+                        ts,
+                    )
+                )
+                if len(points) >= 1000:
+                    write_points(points)
+                    points = []
+            for key in fields:
+                seeded[f"{kind}/{name}/{key}"] = settings.history_minutes
+    if points:
+        write_points(points)
+
+
 @mutation
 def seed_history():
-    """Restore the durable fleet; seed demo data only on an empty state database."""
+    """Restore the fleet and upgrade missing demo history without resetting it."""
     global _state
     restored = state_store.load()
     if restored is not None:
         _state = restored
-        _evaluate()
-        return
-    if not settings.seed_demo:
-        return
-    now, points = utcnow(), []
-    for svc in SERVICES:
-        register_service(
-            svc["name"],
-            svc["warn_ms"],
-            svc["crit_ms"],
-            svc["base_latency_ms"],
-            svc["base_rps"],
-            svc["volatility"],
-            svc["bias"],
-        )
-        state = _state["services"][svc["name"]]
-        for offset in range(settings.history_minutes, 0, -1):
-            state["latency"] = max(
-                0.0,
-                _walk(state["latency"], state["base_latency_ms"], state["volatility"]),
+    elif settings.seed_demo:
+        for svc in SERVICES:
+            register_service(
+                svc["name"],
+                svc["warn_ms"],
+                svc["crit_ms"],
+                svc["base_latency_ms"],
+                svc["base_rps"],
+                svc["volatility"],
+                svc["bias"],
             )
-            fields = {
-                "latency_ms": state["latency"],
-                "rps": state["rps"],
-                "error_rate": state["error_rate"],
-            }
-            ts = now - timedelta(minutes=offset)
-            points.append(
-                make_point(
-                    "service_metrics",
-                    {"service": svc["name"], "data_source": "simulated"},
-                    fields,
-                    ts,
-                )
+        for b in BUOYS:
+            register_buoy(b["id"], b["lat"], b["lng"], list(b["base"]), DEFAULT_UNITS)
+            _state["buoys"][b["id"]].update(
+                battery=b["base_battery"],
+                battery_drain=b.get("battery_drain", 0),
+                solar_watts=b["solar_watts"],
             )
-            state["last_reading_at"] = ts.isoformat()
-    for b in BUOYS:
-        register_buoy(b["id"], b["lat"], b["lng"], list(b["base"]), DEFAULT_UNITS)
-        state = _state["buoys"][b["id"]]
-        state.update(
-            battery=b["base_battery"],
-            battery_drain=b.get("battery_drain", 0),
-            solar_watts=b["solar_watts"],
-        )
-        for offset in range(settings.history_minutes, 0, -1):
-            ts = now - timedelta(minutes=offset)
-            for name, sensor in state["sensors"].items():
-                sensor["value"] = _walk(
-                    sensor["value"], sensor["base"], sensor["volatility"]
-                )
-                sensor["last_reading_at"] = ts.isoformat()
-            fields = {
-                name: sensor["value"] for name, sensor in state["sensors"].items()
-            }
-            fields.update({key: state[key] for key in KNOWN_BUOY_UNIVERSAL_FIELDS})
-            for meta in state["field_metadata"].values():
-                meta["last_reading_at"] = ts.isoformat()
-            points.append(
-                make_point(
-                    "buoy_metrics",
-                    {"buoy": b["id"], "data_source": "simulated"},
-                    fields,
-                    ts,
-                )
-            )
-    if points:
-        write_points(points)
+    _seed_demo_fields()
     _evaluate()
 
 

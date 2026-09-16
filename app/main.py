@@ -22,7 +22,7 @@ _bg_task: Optional[asyncio.Task] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _bg_task
-    print("[startup] restoring fleet (demo history is seeded only on first run)...")
+    print("[startup] restoring fleet (backfilling missing simulated history)...")
     await asyncio.get_event_loop().run_in_executor(None, seed_history)
     print("[startup] fleet ready")
     _bg_task = asyncio.create_task(background_loop())

@@ -243,7 +243,7 @@ the standard local setup.
 | `INFLUX_ORG` | `telem` | |
 | `INFLUX_BUCKET` | `telemetry` | |
 | `TICK_SECONDS` | `3` | how often the simulator writes a new point per series |
-| `HISTORY_MINUTES` | `240` | how much synthetic history to backfill on first boot |
+| `HISTORY_MINUTES` | `1440` | simulated history in minutes, seeded on first boot or upgraded once per field |
 | `CORS_ORIGINS` | `*` | only matters if you serve the dashboard from somewhere else |
 | `STATE_DB` | `.telem/state.sqlite3` | durable registrations, current state, rules, incidents, notes, maintenance and mutes |
 | `SEED_DEMO` | `true` | seed demo sources on the first run; set `false` for an empty fleet |
@@ -553,3 +553,18 @@ explicit equality predicates so storage filtering can be pushed down.
 The browser test checks trace retention, immediate zoom preview, one request per
 wheel burst, reduced motion, and the existing operational workflows. Its local
 interaction timing is a smoke check, not a guarantee of database or network latency.
+
+### Full-day demo history
+
+The default demo seed covers the previous 24 hours at one-minute intervals for
+all service metrics, every registered simulated probe, battery, solar output,
+signal strength, satellite count and coordinates. Values vary over time, with
+a daytime solar cycle and bounded sensor values. Short and full-day chart windows
+therefore have recorded data immediately. The 7-day view shows the available day;
+the seed does not invent a week's history.
+
+Existing installations backfill simulated fields on their next restart without
+resetting registrations, incidents, settings or latest readings. Real fields are
+excluded. A durable per-field marker prevents repeated seeding at the same horizon.
+`SEED_DEMO=false` disables backfill, and an explicit `HISTORY_MINUTES` overrides
+the default; change an old `HISTORY_MINUTES=240` in your `.env` to `1440`.

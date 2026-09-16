@@ -23,9 +23,9 @@ class Settings:
     # How often the background simulator writes a new point per series.
     tick_seconds: float = float(os.getenv("TICK_SECONDS", "3"))
 
-    # How much synthetic history to backfill on first startup, at 1-minute
+    # How much synthetic history to backfill on first startup or upgrade, at 1-minute
     # resolution, so charts aren't empty the moment you open the dashboard.
-    history_minutes: int = int(os.getenv("HISTORY_MINUTES", "240"))
+    history_minutes: int = int(os.getenv("HISTORY_MINUTES", "1440"))
 
     cors_origins: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
     state_db: str = os.getenv("STATE_DB", ".telem/state.sqlite3")

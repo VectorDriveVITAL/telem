@@ -294,3 +294,44 @@ def test_null_sensor_value_is_ignored_for_compatibility(client):
     buoy(client)
     reading(client, temp=22)
     assert reading(client, temp=None)["sensors"]["temp"]["value"] == 22
+
+
+def test_full_day_seed_covers_every_field_and_preserves_real_state(client, monkeypatch):
+    buoy(client)
+    reading(client, temp=22)
+    client.post("/api/services", json={"name": "demo-service"})
+    before = copy.deepcopy(fleet._state)
+    captured = []
+    monkeypatch.setattr(settings, "seed_demo", True)
+    monkeypatch.setattr(settings, "history_minutes", 1440)
+    monkeypatch.setattr(
+        fleet,
+        "make_point",
+        lambda measurement, tags, fields, ts: (measurement, tags, fields, ts),
+    )
+    monkeypatch.setattr(fleet, "write_points", lambda points: captured.extend(points))
+    fleet.seed_history()
+    for measurement, expected in [
+        ("service_metrics", {"latency_ms", "rps", "error_rate"}),
+        ("buoy_metrics", fleet.KNOWN_BUOY_UNIVERSAL_FIELDS),
+    ]:
+        rows = [row for row in captured if row[0] == measurement]
+        assert len(rows) == 1440
+        assert rows[-1][3] - rows[0][3] == timedelta(minutes=1439)
+        assert (
+            timedelta(hours=24)
+            <= fleet.utcnow() - rows[0][3]
+            < timedelta(hours=24, minutes=1)
+        )
+        assert set(rows[0][2]) == expected
+        for field in expected:
+            assert len({row[2][field] for row in rows}) > 1
+    assert fleet._state["buoys"] == before["buoys"]
+    for key in ("latency", "rps", "error_rate", "last_reading_at", "simulated"):
+        assert (
+            fleet._state["services"]["demo-service"][key]
+            == before["services"]["demo-service"][key]
+        )
+    captured.clear()
+    fleet.seed_history()
+    assert captured == []

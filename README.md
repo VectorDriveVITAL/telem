@@ -580,3 +580,5 @@ isolated samples render as dots and absent values from other metrics do not
 interrupt a valid trace. Regression checks also cover animations, replay, exports, maintenance and incident workflows.
 
 Replay sliders scrub a preloaded history buffer directly on each animation frame. Service and sensor chart queries preload four visible windows (about 960 buckets per metric), so moving the playback thumb needs no history request. The replay time anchor stays fixed while dragging, and path morphing is disabled during the gesture. Live-update animations resume afterward. The browser test blocks history requests and verifies five distinct visible trace positions before release.
+
+Playback preserves the current zoom width, including at the latest edge. The time-range buttons and Reset zoom explicitly restore the preset width; dragging playback only moves the visible window.

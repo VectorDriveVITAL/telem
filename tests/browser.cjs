@@ -167,6 +167,40 @@ const path = require("node:path");
       "prefetched history must remain visible throughout playback",
     );
     await page.unroute("**/timeseries?**");
+    // Preserve a zoomed viewport across drag frames, release and the live edge.
+    await page.locator('#view-sensors [data-zoom="in"]').click();
+    await page.waitForTimeout(600);
+    const zoomed = await page
+      .locator("#chart-sensors")
+      .evaluate(
+        (svg) =>
+          Number(svg.dataset.windowEnd) - Number(svg.dataset.windowStart),
+      );
+    assert(zoomed < 3600000);
+    await page.route("**/timeseries?**", (route) => route.abort());
+    const widths = await page
+      .locator("#scrub-range-sensors")
+      .evaluate(async (slider) => {
+        const widths = [];
+        for (const value of [850, 650, 1000]) {
+          slider.value = String(value);
+          slider.dispatchEvent(new Event("input", { bubbles: true }));
+          await new Promise(requestAnimationFrame);
+          const svg = document.querySelector("#chart-sensors");
+          widths.push(
+            Number(svg.dataset.windowEnd) - Number(svg.dataset.windowStart),
+          );
+        }
+        slider.dispatchEvent(new Event("change", { bubbles: true }));
+        return widths;
+      });
+    assert(
+      widths.every((width) => Math.abs(width - zoomed) < 1),
+      "scrubbing must preserve zoom even at the latest edge",
+    );
+    await page.unroute("**/timeseries?**");
+    await page.locator('#view-sensors [data-zoom="reset"]').click();
+
     await page
       .getByRole("button", { name: "+ Register buoy", exact: true })
       .click();

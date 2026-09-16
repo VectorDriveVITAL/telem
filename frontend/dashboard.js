@@ -413,6 +413,8 @@ class TelemetryChart {
     svg += `</g><line class="chart-crosshair" opacity="0" stroke="var(--text-low)" stroke-dasharray="3 3" y1="${this.top}" y2="${this.bottom}" pointer-events="none"/>`;
     if (!all.length)
       svg += `<text class="chart-empty" x="${W / 2}" y="${H / 2}" text-anchor="middle">No recorded readings in this window</text>`;
+    this.svg.dataset.windowStart = this.bounds.start;
+    this.svg.dataset.windowEnd = this.bounds.end;
     this.svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     this.svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     // Retain trace nodes: morph compatible paths, crossfade topology changes.
@@ -688,7 +690,10 @@ async function loadChart(scope) {
   const preload = {
     start: Math.max(
       replayEnd - 31 * 86400000,
-      Math.min(range.start, replayEnd - span * 4),
+      Math.min(
+        range.start,
+        replayEnd - Math.max(span, S.minutes[scope] * 60000) * 4,
+      ),
     ),
     end: Math.max(range.end, replayEnd),
   };
@@ -2114,15 +2119,21 @@ for (const scope of ["services", "sensors"]) {
     chart.scrubbing = true;
     ++S.historySeq[scope]; // A slow earlier response must not replace the replay buffer.
     const anchor = chart.replayEnd || Date.now();
-    const span = S.minutes[scope] * 60000;
-    const end = anchor - (1 - Number(slider.value) / 1000) * span * 3;
+    const presetSpan = S.minutes[scope] * 60000;
+    const span = chart.bounds.end - chart.bounds.start;
+    const travel = Math.max(span, presetSpan) * 4 - span;
+    const end = anchor - (1 - Number(slider.value) / 1000) * travel;
+    // Only the unzoomed live edge can use the preset-derived live window.
+    // Keep an explicit range at the right edge too when the user is zoomed.
     S.windows[scope] =
-      slider.value === "1000" ? null : { start: end - span, end };
+      slider.value === "1000" && Math.abs(span - presetSpan) < 1
+        ? null
+        : { start: end - span, end };
     chart.bounds = { start: end - span, end };
     // No request, debounce or morph: the viewport tracks the thumb each frame.
     cancelAnimationFrame(chart.scrubFrame);
     chart.scrubFrame = requestAnimationFrame(() => chart.render());
-    const live = slider.value === "1000";
+    const live = !S.windows[scope];
     setText(
       "scrub-status-" + scope,
       live ? "● LIVE" : "REPLAY · " + shortTime(end),

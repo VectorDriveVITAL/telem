@@ -1,5 +1,11 @@
 /* Fleet operations. No client-generated readings; every chart uses API timestamps. */
 "use strict";
+import { animate as aAnimate } from "./anime.esm.js";
+import { animate as mAnimate } from "./motion.esm.js";
+// This build of motion.dev takes tween "duration" in seconds; every other
+// animation call in this file (anime.js, native Element.animate) is in
+// milliseconds, so this keeps every duration below written in ms.
+const sec = (ms) => ms / 1000;
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
   String(value ?? "").replace(
@@ -98,20 +104,37 @@ async function api(path, method = "GET", body) {
   }
   return response.status === 204 ? null : response.json();
 }
+let toastVisible = false;
 function toast(message) {
-  $("toast").textContent = message;
-  $("toast").style.display = "block";
+  const el = $("toast");
+  el.textContent = message;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ($("toast").style.display = "none"), 5000);
+  if (!toastVisible) {
+    toastVisible = true;
+    el.style.display = "block";
+    mAnimate(
+      el,
+      { opacity: [0, 1], y: [14, 0] },
+      reducedMotion.matches
+        ? { duration: 0 }
+        : { type: "spring", stiffness: 420, damping: 32 },
+    );
+  }
+  toastTimer = setTimeout(() => {
+    toastVisible = false;
+    mAnimate(el, { opacity: 0, y: 10 }, { duration: reducedMotion.matches ? 0 : sec(180) }).then(
+      () => (el.style.display = "none"),
+    );
+  }, 5000);
 }
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
-const numberFrames = new WeakMap();
+const numberAnims = new WeakMap();
 function setText(id, value) {
   const el = $(id);
   if (!el || el.textContent === String(value)) return;
   const previous = Number(el.textContent.replace(/[, %]/g, ""));
   const next = Number(String(value).replace(/[, %]/g, ""));
-  cancelAnimationFrame(numberFrames.get(el));
+  numberAnims.get(el)?.pause();
   if (
     !["rps-num", "batt-num"].includes(id) ||
     reducedMotion.matches ||
@@ -121,17 +144,18 @@ function setText(id, value) {
     el.textContent = value;
     return;
   }
-  const start = performance.now();
-  const frame = (now) => {
-    const t = Math.min(1, (now - start) / 650);
-    el.textContent =
-      t === 1
-        ? value
-        : number(previous + (next - previous) * (1 - (1 - t) ** 3)) +
-          (String(value).endsWith("%") ? "%" : "");
-    if (t < 1) numberFrames.set(el, requestAnimationFrame(frame));
-  };
-  numberFrames.set(el, requestAnimationFrame(frame));
+  const suffix = String(value).endsWith("%") ? "%" : "";
+  const tween = { n: previous };
+  numberAnims.set(
+    el,
+    aAnimate(tween, {
+      n: next,
+      duration: 650,
+      ease: "outCubic",
+      onUpdate: () => (el.textContent = number(tween.n) + suffix),
+      onComplete: () => (el.textContent = value),
+    }),
+  );
 }
 function sourceButton(kind, source, label = "Inspect") {
   return `<button class="action" data-action="inspect" data-kind="${kind}" data-source="${esc(source)}">${label}</button>`;
@@ -1379,6 +1403,23 @@ function dialog(title, fields, submit, label = "Save") {
   $("dialog-submit").textContent = label;
   formSubmit = submit;
   $("operation-dialog").showModal();
+  if (!reducedMotion.matches) {
+    mAnimate(
+      $("operation-dialog"),
+      { opacity: [0, 1], scale: [0.96, 1] },
+      { type: "spring", stiffness: 420, damping: 34 },
+    );
+  }
+}
+function closeDialog() {
+  const el = $("operation-dialog");
+  if (reducedMotion.matches) {
+    el.close();
+    return;
+  }
+  mAnimate(el, { opacity: 0, scale: 0.97 }, { duration: sec(140), ease: "easeIn" }).then(() =>
+    el.close(),
+  );
 }
 const localDate = (value) => {
   const d = new Date(value);
@@ -1861,7 +1902,7 @@ async function handleAction(button) {
   }
   if (a === "simulate-buoy") {
     await api(`/api/buoys/${enc(button.dataset.source)}/simulate`, "POST", {});
-    $("operation-dialog").close();
+    closeDialog();
     await refresh();
     toast("Simulation resumed. New samples will arrive on the next tick.");
     return;
@@ -1899,7 +1940,7 @@ async function handleAction(button) {
     return;
   }
   if (a === "close-dialog") {
-    $("operation-dialog").close();
+    closeDialog();
     return;
   }
 }
@@ -2028,7 +2069,7 @@ $("operation-form").addEventListener("submit", async (e) => {
   $("dialog-submit").disabled = true;
   try {
     await formSubmit(new FormData(e.currentTarget));
-    $("operation-dialog").close();
+    closeDialog();
     await refresh();
     toast("Saved.");
   } catch (err) {

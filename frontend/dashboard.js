@@ -136,7 +136,9 @@ function setText(id, value) {
   const next = Number(String(value).replace(/[, %]/g, ""));
   numberAnims.get(el)?.pause();
   if (
-    !["rps-num", "batt-num"].includes(id) ||
+    (id !== "rps-num" &&
+      id !== "batt-num" &&
+      !id.startsWith("overview-count-")) ||
     reducedMotion.matches ||
     !Number.isFinite(previous) ||
     !Number.isFinite(next)
@@ -156,6 +158,34 @@ function setText(id, value) {
       onComplete: () => (el.textContent = value),
     }),
   );
+}
+const bearingAnims = new WeakMap();
+const bearingCurrent = new WeakMap();
+function setBearing(id, targetDeg) {
+  const el = $(id);
+  if (!el) return;
+  const current = bearingCurrent.has(el) ? bearingCurrent.get(el) : targetDeg;
+  bearingAnims.get(el)?.pause();
+  if (reducedMotion.matches) {
+    el.setAttribute("transform", `rotate(${targetDeg} 30 30)`);
+    bearingCurrent.set(el, targetDeg);
+    return;
+  }
+  // Take the shorter way around the dial rather than always spinning forward.
+  const delta = (((targetDeg - current + 180) % 360) + 360) % 360 - 180;
+  const next = current + delta;
+  const tween = { deg: current };
+  bearingAnims.set(
+    el,
+    aAnimate(tween, {
+      deg: next,
+      duration: 500,
+      ease: "outCubic",
+      onUpdate: () =>
+        el.setAttribute("transform", `rotate(${tween.deg} 30 30)`),
+    }),
+  );
+  bearingCurrent.set(el, next);
 }
 function sourceButton(kind, source, label = "Inspect") {
   return `<button class="action" data-action="inspect" data-kind="${kind}" data-source="${esc(source)}">${label}</button>`;
@@ -1082,10 +1112,7 @@ function renderReadouts() {
     );
     rows[0].textContent = b.gnss_fix;
     rows[1].textContent = drift(b).text;
-    $("bearing-pointer").setAttribute(
-      "transform",
-      `rotate(${drift(b).bearing} 30 30)`,
-    );
+    setBearing("bearing-pointer", drift(b).bearing);
     $("current-readings-grid")
       .closest(".panel")
       .querySelector(".panel-title").textContent = "Current readings · " + b.id;
@@ -1124,12 +1151,17 @@ function renderOverview() {
       "rising",
     ],
   ];
-  $("overview-cards").innerHTML = cards
-    .map(
-      ([key, label, help, filter]) =>
-        `<button class="overview-card" data-action="overview-filter" data-filter="${filter}"><span class="label">${label}</span><strong>${c[key]}</strong><small>${help}</small></button>`,
-    )
-    .join("");
+  if (!$("overview-cards").children.length) {
+    $("overview-cards").innerHTML = cards
+      .map(
+        ([key, label, help, filter]) =>
+          `<button class="overview-card" data-action="overview-filter" data-filter="${filter}"><span class="label">${label}</span><strong id="overview-count-${filter}">${c[key]}</strong><small>${help}</small></button>`,
+      )
+      .join("");
+  } else {
+    for (const [key, , , filter] of cards)
+      setText(`overview-count-${filter}`, String(c[key]));
+  }
   const filtered = S.overview.urgent_sources.filter(
     (s) =>
       !S.overviewFilter ||
@@ -1160,6 +1192,7 @@ function renderOverview() {
       .join("") ||
     '<div class="empty">No alerts yet. Activity will appear as conditions change.</div>';
 }
+const seenAlertIds = { services: null, sensors: null };
 function renderFeeds() {
   for (const scope of ["services", "sensors"]) {
     const kind = scope === "services" ? "service" : "buoy";
@@ -1170,15 +1203,34 @@ function renderFeeds() {
           `<div class="source-item"><small>${esc(m.source)} muted until ${esc(shortTime(m.expires_at))}</small><button class="action" data-action="unmute" data-id="${esc(m.id)}">Unmute</button></div>`,
       )
       .join("");
+    const items = S.alerts
+      .filter((a) => a.source_type === kind && !a.muted)
+      .slice(0, 20);
+    const previouslySeen = seenAlertIds[scope];
     $("feed-" + scope + "-list").innerHTML =
-      S.alerts
-        .filter((a) => a.source_type === kind && !a.muted)
-        .slice(0, 20)
+      items
         .map(
           (a) =>
-            `<div class="feed-item ${a.acknowledged_at ? "acked" : ""}" data-action="jump" data-kind="${kind}" data-source="${esc(a.source)}" data-time="${esc(a.time)}"><div class="feed-top"><span class="sev ${dot(a.severity)}"></span><span class="feed-sev-text">${esc(a.severity.toUpperCase())}</span><span class="feed-time">${esc(shortTime(a.time))}</span><button class="ack-btn" data-action="ack-alert" data-id="${a.id}" data-acked="${!!a.acknowledged_at}">${a.acknowledged_at ? "Acked" : "Ack"}</button><button class="mute-btn" data-action="mute" data-kind="${kind}" data-source="${esc(a.source)}">Mute</button></div><div class="feed-msg">${esc(a.message)}</div></div>`,
+            `<div class="feed-item ${a.acknowledged_at ? "acked" : ""}" data-alert-id="${a.id}" data-action="jump" data-kind="${kind}" data-source="${esc(a.source)}" data-time="${esc(a.time)}"><div class="feed-top"><span class="sev ${dot(a.severity)}"></span><span class="feed-sev-text">${esc(a.severity.toUpperCase())}</span><span class="feed-time">${esc(shortTime(a.time))}</span><button class="ack-btn" data-action="ack-alert" data-id="${a.id}" data-acked="${!!a.acknowledged_at}">${a.acknowledged_at ? "Acked" : "Ack"}</button><button class="mute-btn" data-action="mute" data-kind="${kind}" data-source="${esc(a.source)}">Mute</button></div><div class="feed-msg">${esc(a.message)}</div></div>`,
         )
         .join("") || '<div class="empty">No unmuted events.</div>';
+    seenAlertIds[scope] = new Set(items.map((a) => String(a.id)));
+    if (!reducedMotion.matches && previouslySeen) {
+      const fresh = [
+        ...$("feed-" + scope + "-list").querySelectorAll(".feed-item"),
+      ].filter((el) => !previouslySeen.has(el.dataset.alertId));
+      fresh.forEach((el, i) => {
+        setTimeout(
+          () =>
+            aAnimate(
+              el,
+              { opacity: [0, 1], x: [-10, 0] },
+              { duration: 260, ease: "outQuad" },
+            ),
+          i * 45,
+        );
+      });
+    }
   }
 }
 function renderIncidents() {
@@ -1244,10 +1296,7 @@ function renderDrawer() {
   setText("dw-coords", coords(b));
   setText("dw-fix", b.gnss_fix);
   setText("dw-drift", drift(b).text);
-  $("dw-bearing-pointer").setAttribute(
-    "transform",
-    `rotate(${drift(b).bearing} 30 30)`,
-  );
+  setBearing("dw-bearing-pointer", drift(b).bearing);
   setText(
     "dw-contact",
     ago(b.last_contact_at) + (b.contact_simulated ? " · simulated" : ""),
@@ -1350,6 +1399,12 @@ function updateMap() {
 }
 function renderDrift() {
   const svg = document.querySelector(".posmap");
+  const oldPos = new Map(
+    [...svg.querySelectorAll(".svg-marker")].map((g) => {
+      const c = g.querySelector(".pos-node");
+      return [g.dataset.source, { x: +c.getAttribute("cx"), y: +c.getAttribute("cy") }];
+    }),
+  );
   const all = S.buoys.map((b) => ({ b, ...drift(b) })),
     max = Math.max(
       10,
@@ -1381,6 +1436,25 @@ function renderDrift() {
         `<button class="action" data-select="buoy" data-source="${esc(d.b.id)}">${esc(d.b.id)} · ${esc(number(d.meters))} m</button>`,
     )
     .join("");
+  // Drift into the new reading instead of teleporting: only nodes that
+  // existed before and actually moved get a tween.
+  if (!reducedMotion.matches) {
+    for (const g of svg.querySelectorAll(".svg-marker")) {
+      const prev = oldPos.get(g.dataset.source);
+      if (!prev) continue;
+      const circle = g.querySelector(".pos-node");
+      const nx = +circle.getAttribute("cx"),
+        ny = +circle.getAttribute("cy");
+      if (Math.abs(nx - prev.x) < 0.5 && Math.abs(ny - prev.y) < 0.5) continue;
+      circle.setAttribute("cx", prev.x);
+      circle.setAttribute("cy", prev.y);
+      mAnimate(
+        circle,
+        { cx: nx, cy: ny },
+        { type: "spring", stiffness: 260, damping: 24 },
+      );
+    }
+  }
 }
 
 function field(

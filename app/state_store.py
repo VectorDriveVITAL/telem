@@ -20,6 +20,9 @@ def _connect():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS vital (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+    )
     return conn
 
 
@@ -36,4 +39,20 @@ def save(snapshot):
             conn.execute(
                 "INSERT INTO state VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (payload,),
+            )
+
+
+def load_vital():
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT payload FROM vital WHERE id = 1").fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def save_vital(creds):
+    """Stores the VITAL login, password included, in plain text beside the state."""
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO vital VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (json.dumps(creds),),
             )

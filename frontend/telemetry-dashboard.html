@@ -459,6 +459,7 @@
         <button class="tab-btn" data-view="sensors">Sensor telemetry</button>
         <button class="tab-btn" data-view="incidents">Incidents</button>
         <button class="tab-btn" data-view="analysis">Analysis</button>
+        <button class="tab-btn" data-view="vital">VITAL</button>
       </div>
     </div>
     <div class="top-right">
@@ -491,6 +492,25 @@
       <section class="panel"><div class="panel-head analysis-controls"><label>Buoy<select id="analysis-buoy"></select></label><label>Window<select id="analysis-range"><option value="15">15 minutes</option><option value="60" selected>1 hour</option><option value="360">6 hours</option><option value="1440">24 hours</option><option value="10080">7 days</option></select></label><label>Scale<select id="analysis-scale"><option value="normalized">Each metric, 0–100%</option><option value="shared">Shared numeric axis</option></select></label><button class="action" data-action="analysis-export">Export CSV</button><button class="action" data-action="analysis-live">Return to live</button></div>
       <div class="metric-checks" id="analysis-metrics"></div><div class="chart-wrap analysis-chart" id="wrap-analysis"><svg id="chart-analysis" class="chart"></svg><div class="tooltip mono" id="tooltip-analysis"></div></div><div id="analysis-summary" class="analysis-summary"></div><div class="chart-note">Hover to see original values and units. Dashed markers are maintenance events. Wheel or drag to inspect a time window.</div></section>
       <section class="panel"><div class="panel-head"><div class="panel-title">Maintenance in this window</div><button class="action" data-action="analysis-maintenance">Log work</button></div><div id="analysis-events"></div></section>
+    </main></div>
+
+    <div class="view" id="view-vital"><main>
+      <div class="overview-heading"><div><h1>VITAL forwarding</h1><p class="muted">Every buoy reading, real and simulated, is copied to the VITAL sensor API. Service metrics are not sent.</p></div></div>
+      <section class="panel vital-panel">
+        <div class="panel-head"><div><div class="panel-title">Credentials</div><div class="panel-sub" id="vital-state">Loading…</div></div></div>
+        <form id="vital-form" class="vital-form">
+          <label class="full">API URL<input name="api_url" type="url" placeholder="https://vitalapi.pods.portals.tapis.io/api/v1"></label>
+          <label>Username<input name="username" autocomplete="username" required></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+          <label>Campaign id<input name="campaign_id" type="number" min="1" required></label>
+          <p id="vital-error" class="full" role="alert"></p>
+          <div class="full vital-actions"><button type="button" class="action danger" data-action="vital-disconnect">Disconnect</button><button type="submit" class="action primary" id="vital-submit">Save and test</button></div>
+        </form>
+      </section>
+      <section class="panel vital-remote-panel">
+        <div class="panel-head"><div><div class="panel-title">Data in VITAL</div><div class="panel-sub">Campaign, stations and sensors as vitalapi reports them</div></div><button class="action" data-action="vital-refresh">Refresh</button></div>
+        <pre id="vital-remote" class="mono vital-remote">Not loaded.</pre>
+      </section>
     </main></div>
 
     <!-- ===================== VIEW: SERVICES ===================== -->

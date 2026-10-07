@@ -16,7 +16,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from . import state_store
+from . import state_store, vital
 from .config import settings
 from .influx_client import make_point, utcnow, write_points
 from .models import SensorRules
@@ -506,7 +506,7 @@ def seed_history():
 
 @mutation
 def _tick_once():
-    now, points = utcnow(), []
+    now, points, forwards = utcnow(), [], []
     for name, s in _state["services"].items():
         if not s["simulated"]:
             continue
@@ -569,8 +569,11 @@ def _tick_once():
                     now,
                 )
             )
+            forwards.append((name, b, fields))
     if points:
         write_points(points)
+    for name, b, fields in forwards:
+        _forward(name, b, now, fields)
     _evaluate()
 
 
@@ -673,7 +676,19 @@ def ingest_buoy(buoy_id, fields_in, time_str=None):
     )
     b.update(last_contact=time.time(), contact_simulated=False)
     _evaluate()
+    _forward(buoy_id, b, ts, fields)
     return b
+
+
+def _forward(buoy_id, b, ts, fields):
+    vital.forward(
+        buoy_id,
+        ts,
+        fields.get("lat", b["lat"]),
+        fields.get("lng", b["lng"]),
+        fields,
+        {k: UNITS.get(k) or b["sensors"].get(k, {}).get("unit", "") for k in fields},
+    )
 
 
 @mutation

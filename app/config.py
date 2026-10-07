@@ -31,5 +31,13 @@ class Settings:
     state_db: str = os.getenv("STATE_DB", ".telem/state.sqlite3")
     seed_demo: bool = os.getenv("SEED_DEMO", "true").lower() == "true"
 
+    # Forward real buoy readings to the VITAL sensor API; off unless all three are set.
+    vital_api_url: str = os.getenv(
+        "VITAL_API_URL", "https://vitalapi.pods.portals.tapis.io/api/v1"
+    )
+    vital_username: str = os.getenv("VITAL_USERNAME", "")
+    vital_password: str = os.getenv("VITAL_PASSWORD", "")
+    vital_campaign_id: str = os.getenv("VITAL_CAMPAIGN_ID", "")
+
 
 settings = Settings()

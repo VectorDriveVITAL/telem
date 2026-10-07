@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
 from .. import generator as fleet
+from .. import vital
 from ..influx_client import query_rows, window
 from ..models import (
     AlertUpdate,
@@ -19,11 +20,32 @@ from ..models import (
     MuteCreate,
     NoteCreate,
     SensorRules,
+    VitalCredentials,
 )
 from .buoys import _to_status as buoy_status
 from .services import _to_status as service_status
 
 router = APIRouter(prefix="/api", tags=["operations"])
+
+
+@router.get("/vital", summary="VITAL forwarding status (never returns the password)")
+def vital_status():
+    return vital.status()
+
+
+@router.put("/vital", summary="Check, save and use VITAL credentials")
+def vital_configure(body: VitalCredentials):
+    return vital.configure(body.api_url, body.username, body.password, body.campaign_id)
+
+
+@router.get("/vital/remote", summary="Campaign, stations and sensors as VITAL holds them")
+def vital_remote():
+    return vital.remote_snapshot()
+
+
+@router.delete("/vital", summary="Stop forwarding and forget the saved credentials")
+def vital_disconnect():
+    return vital.disconnect()
 
 
 @router.get("/overview")

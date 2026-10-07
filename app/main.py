@@ -13,6 +13,7 @@ from urllib3.exceptions import HTTPError
 from .config import settings
 from .generator import background_loop, seconds_since_start, seed_history
 from .influx_client import QueryTooLarge, close_client
+from . import vital
 from .routers import alerts, buoys, incidents, ingest, operations, services
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     await asyncio.get_event_loop().run_in_executor(None, seed_history)
     print("[startup] fleet ready")
     _bg_task = asyncio.create_task(background_loop())
+    vital.start()
     yield
     if _bg_task:
         _bg_task.cancel()

@@ -348,6 +348,25 @@ pip install requests   # only needed for this example script, not the API itself
 python3 scripts/feed_sensor_example.py --buoy buoy-01 --interval 5
 ```
 
+### Forwarding to the VITAL sensor API
+
+Enter a VITAL username, password and campaign id in the dashboard's **VITAL**
+tab (or set `VITAL_USERNAME`, `VITAL_PASSWORD` and `VITAL_CAMPAIGN_ID` in `.env`)
+to copy every buoy reading, **real and simulated**, to
+[vitalapi](https://vitalapi.pods.portals.tapis.io/docs). Each buoy becomes a
+mobile station with the buoy's id as its name in that campaign (created on first use).
+Each field becomes a sensor whose alias is the field name. Positions become the
+measurement geometry. Readings are batched every 30 seconds through the CSV
+upload endpoint, and failed batches are retried. The queue is in memory, so a
+reading still waiting at restart is not forwarded, but it is still kept in
+InfluxDB. Re-sending is safe because VITAL ignores duplicate sensor and time pairs.
+
+**Save and test** logs in and looks up the campaign before saving anything. Saved
+credentials replace the `.env` values from then on, and **Disconnect** turns
+forwarding off. The password is stored in plain text in `STATE_DB`. `GET /api/vital`
+never returns it, but `PUT`/`DELETE /api/vital` are as unauthenticated as the
+rest of this dashboard, so keep the dashboard on a trusted network.
+
 ### Resuming simulation
 
 | Endpoint | Body | Notes |

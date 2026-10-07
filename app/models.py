@@ -253,3 +253,10 @@ class MuteCreate(Model):
     source_type: Literal["service", "buoy"]
     source: Identifier
     duration_minutes: int = Field(60, ge=1, le=10080)
+
+
+class VitalCredentials(Model):
+    api_url: str = Field("", max_length=500)
+    username: str = Field(..., max_length=200)
+    password: str = Field("", max_length=500)  # blank keeps the saved password
+    campaign_id: int = Field(..., ge=1)

@@ -866,7 +866,7 @@ function setTheme(theme) {
 }
 function switchTab(tab, updateHash = true, load = true) {
   if (
-    !["overview", "services", "sensors", "incidents", "analysis"].includes(tab)
+    !["overview", "services", "sensors", "incidents", "analysis", "vital"].includes(tab)
   )
     return;
   const changed = S.tab !== tab;
@@ -901,6 +901,10 @@ function switchTab(tab, updateHash = true, load = true) {
         );
       });
   }
+  if (tab === "vital") {
+    loadVital().catch((e) => toast(e.message));
+    loadVitalRemote();
+  }
   if (load && charts[tab]) loadChart(tab).catch((e) => toast(e.message));
   if (updateHash) writeHash();
 }
@@ -922,7 +926,7 @@ function applyHash() {
   }
   if (
     tab &&
-    ["overview", "services", "sensors", "incidents", "analysis"].includes(tab)
+    ["overview", "services", "sensors", "incidents", "analysis", "vital"].includes(tab)
   ) {
     if (
       id &&
@@ -1799,6 +1803,17 @@ async function jump(kind, source, time) {
 async function handleAction(button) {
   const a = button.dataset.action,
     id = button.dataset.id;
+  if (a === "vital-disconnect") {
+    if (!confirm("Stop forwarding to VITAL and forget the saved login?")) return;
+    renderVital(await api("/api/vital", "DELETE"));
+    await loadVitalRemote();
+    toast("VITAL forwarding stopped.");
+    return;
+  }
+  if (a === "vital-refresh") {
+    await Promise.all([loadVital(), loadVitalRemote()]);
+    return;
+  }
   if (a === "inspect") {
     await selectSource(button.dataset.kind, button.dataset.source);
     return;
@@ -2137,6 +2152,76 @@ async function poll() {
   }
 }
 
+function renderVital(v) {
+  const form = $("vital-form");
+  form.api_url.value = v.api_url;
+  form.username.value = v.username;
+  form.campaign_id.value = v.campaign_id;
+  form.password.value = "";
+  form.password.placeholder = v.password_set ? "Saved. Leave blank to keep it" : "";
+  form.password.required = !v.password_set;
+  const parts = v.enabled
+    ? [
+        `Forwarding to campaign ${v.campaign_id}${v.campaign_name ? " (" + v.campaign_name + ")" : ""}`,
+        v.last_upload ? "last upload " + timestamp(v.last_upload) : "no upload yet",
+        v.queued ? v.queued + " readings queued" : "",
+      ]
+    : ["Not connected"];
+  setText("vital-state", parts.filter(Boolean).join(" · "));
+  setText("vital-error", v.last_error || "");
+}
+async function loadVital() {
+  renderVital(await api("/api/vital"));
+}
+function vitalRemoteText(d) {
+  const c = d.campaign,
+    sensorCount = d.stations.reduce((n, st) => n + st.sensors.length, 0),
+    val = (n) => (n === null || n === undefined ? "-" : number(n)),
+    lines = [
+      `campaign ${c.id} · ${c.name} · ${d.stations.length} stations, ${sensorCount} sensors · fetched ${shortTime(d.fetched_at)}`,
+      `  ${c.start_date || "?"} → ${c.end_date || "?"} · published: ${c.is_published ? "yes" : "no"}${c.description ? " · " + c.description : ""}`,
+    ];
+  for (const st of d.stations) {
+    lines.push(
+      "",
+      `station ${st.id} · ${st.name} · ${st.station_type} · ${st.sensors.length} sensors${st.description ? " · " + st.description : ""}`,
+    );
+    for (const se of st.sensors) {
+      const x = se.statistics || {};
+      lines.push(
+        `  ${String(se.id).padEnd(5)} ${String(se.alias).padEnd(14)} ${(se.units || "").padEnd(10)}` +
+          ` n=${String(x.count ?? 0).padEnd(7)} last ${val(x.last_measurement_value).padEnd(9)}` +
+          ` @ ${x.last_measurement_time ? new Date(x.last_measurement_time).toLocaleString() : "-"}` +
+          `   min ${val(x.min_value)}  max ${val(x.max_value)}  avg ${val(x.avg_value)}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+async function loadVitalRemote() {
+  const el = $("vital-remote");
+  el.textContent = "Loading from vitalapi…";
+  try {
+    el.textContent = vitalRemoteText(await api("/api/vital/remote"));
+  } catch (err) {
+    el.textContent = err.message;
+  }
+}
+$("vital-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setText("vital-error", "");
+  $("vital-submit").disabled = true;
+  try {
+    const body = Object.fromEntries(new FormData(e.currentTarget));
+    renderVital(await api("/api/vital", "PUT", body));
+    loadVitalRemote();
+    toast("VITAL login verified and saved.");
+  } catch (err) {
+    setText("vital-error", err.message);
+  } finally {
+    $("vital-submit").disabled = false;
+  }
+});
 $("operation-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   setText("form-error", "");

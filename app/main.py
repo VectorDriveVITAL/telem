@@ -13,8 +13,9 @@ from urllib3.exceptions import HTTPError
 from .config import settings
 from .generator import background_loop, seconds_since_start, seed_history
 from .influx_client import QueryTooLarge, close_client
-from . import vital
+from . import receiver, vital
 from .routers import alerts, buoys, incidents, ingest, operations, services
+from .routers import receiver as receiver_routes
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 _bg_task: Optional[asyncio.Task] = None
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     _bg_task = asyncio.create_task(background_loop())
     vital.start()
     yield
+    receiver.stop()  # the bridge would otherwise outlive us holding the serial port
     if _bg_task:
         _bg_task.cancel()
         try:
@@ -69,6 +71,7 @@ app.include_router(alerts.router)
 app.include_router(incidents.router)
 app.include_router(ingest.router)
 app.include_router(operations.router)
+app.include_router(receiver_routes.router)
 
 
 @app.exception_handler(KeyError)

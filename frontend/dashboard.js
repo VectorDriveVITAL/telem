@@ -82,12 +82,12 @@ let toastTimer,
   paletteIndex = 0,
   paletteResults = [];
 
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, timeout = 25000) {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(timeout),
   });
   if (!response.ok) {
     let detail;
@@ -866,7 +866,7 @@ function setTheme(theme) {
 }
 function switchTab(tab, updateHash = true, load = true) {
   if (
-    !["overview", "services", "sensors", "incidents", "analysis", "vital"].includes(tab)
+    !["overview", "services", "sensors", "incidents", "analysis", "vital", "receiver"].includes(tab)
   )
     return;
   const changed = S.tab !== tab;
@@ -905,6 +905,11 @@ function switchTab(tab, updateHash = true, load = true) {
     loadVital().catch((e) => toast(e.message));
     loadVitalRemote();
   }
+  clearInterval(receiverTimer);
+  if (tab === "receiver") {
+    loadReceiver().catch((e) => toast(e.message));
+    receiverTimer = setInterval(() => loadReceiver().catch(() => {}), 3000);
+  }
   if (load && charts[tab]) loadChart(tab).catch((e) => toast(e.message));
   if (updateHash) writeHash();
 }
@@ -926,7 +931,7 @@ function applyHash() {
   }
   if (
     tab &&
-    ["overview", "services", "sensors", "incidents", "analysis", "vital"].includes(tab)
+    ["overview", "services", "sensors", "incidents", "analysis", "vital", "receiver"].includes(tab)
   ) {
     if (
       id &&
@@ -1810,6 +1815,37 @@ async function handleAction(button) {
     toast("VITAL forwarding stopped.");
     return;
   }
+  if (a === "receiver-start" || a === "receiver-restart") {
+    renderReceiver(await api("/api/receiver/" + a.slice(9), "POST", receiverOptions()));
+    return;
+  }
+  if (a === "receiver-stop") {
+    renderReceiver(await api("/api/receiver/stop", "POST"));
+    return;
+  }
+  if (a === "receiver-clear") {
+    renderReceiver(await api("/api/receiver/log", "DELETE"));
+    return;
+  }
+  if (a === "receiver-copy") {
+    await navigator.clipboard.writeText($("receiver-log").textContent);
+    toast("Bridge output copied.");
+    return;
+  }
+  if (a === "receiver-mode") {
+    const mode = button.dataset.id;
+    if (!confirm(`Flash the board as ${mode.toUpperCase()}? The bridge stops while it flashes.`)) return;
+    setText("receiver-state", "Flashing as " + mode.toUpperCase() + "…");
+    receiverBusy({ flashing: mode });
+    try {
+      renderReceiver(await api("/api/receiver/mode", "PUT", { mode }, 200000));
+      toast("Board flashed as " + mode.toUpperCase() + ".");
+    } catch (err) {
+      await loadReceiver().catch(() => {});
+      throw err;
+    }
+    return;
+  }
   if (a === "vital-refresh") {
     await Promise.all([loadVital(), loadVitalRemote()]);
     return;
@@ -2207,6 +2243,109 @@ async function loadVitalRemote() {
     el.textContent = err.message;
   }
 }
+let receiverTimer, receiverLast;
+const ROLE_CLASSES = [
+  ["err", /FAIL|ERROR|Traceback|serial lost|not found|timed out/i],
+  ["warn", /\bskip\b|waiting for|no device|no ST-LINK|backlog|listening, 0 /i],
+  ["sent", /\| sent \|/],
+  ["rx", /LoRa [RT]X #|DRY {2}\|/],
+  ["telem", /\[telem\]/],
+  ["flash", /flash \|/],
+];
+function logClass(line) {
+  return ROLE_CLASSES.find(([, re]) => re.test(line))?.[0] || "chatter";
+}
+function receiverBusy(r) {
+  document
+    .querySelectorAll("#view-receiver [data-action^='receiver-'], #receiver-port, #receiver-dry")
+    .forEach((el) => (el.disabled = !!r.flashing));
+}
+function renderReceiverLog(r) {
+  const log = $("receiver-log");
+  const showChatter = $("log-chatter").checked;
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  const frag = document.createDocumentFragment();
+  for (const line of r.log) {
+    const cls = logClass(line);
+    if (cls === "chatter" && !showChatter) continue;
+    const span = document.createElement("span");
+    span.className = "l-" + cls;
+    span.textContent = line + "\n";
+    frag.append(span);
+  }
+  log.replaceChildren(frag);
+  if (!r.log.length) log.textContent = "No bridge output yet.";
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+function renderReceiver(r) {
+  receiverLast = r;
+  setText(
+    "receiver-state",
+    r.flashing
+      ? `Flashing as ${r.flashing.toUpperCase()}… (about 20 s, do not unplug the board)`
+      : [
+          r.running ? "Bridge running" + (r.dry_run ? " (dry run)" : "") : "Bridge stopped",
+          r.mode ? "board is " + r.mode.toUpperCase() : "board role unknown",
+        ].join(" · "),
+  );
+  document
+    .querySelectorAll('[data-action="receiver-mode"]')
+    .forEach((b) => b.classList.toggle("primary", b.dataset.id === r.mode));
+  const l = r.link,
+    stale = r.running && r.mode !== "tx" && (l.age_s === null || l.age_s > 15);
+  const parts = [
+    r.running ? (r.connected_port ? "port " + r.connected_port : "no board found") : "",
+    ...(r.mode === "tx"
+      ? [l.tx_seq === null ? "transmitting" : `transmitting, last packet #${l.tx_seq}`]
+      : [
+          l.age_s === null ? "no packet yet" : `last packet ${Math.round(l.age_s)} s ago`,
+          l.rssi === null ? "" : `RSSI ${l.rssi} dBm · SNR ${l.snr} dB`,
+          `received ${l.received} · lost ${l.lost}`,
+        ]),
+  ].filter(Boolean);
+  $("receiver-link").innerHTML = "";
+  const span = document.createElement("span");
+  span.className = stale ? "warn" : "";
+  span.textContent = parts.join("  ·  ") + (stale ? "  — no recent packets" : "");
+  $("receiver-link").append(span);
+  const sel = $("receiver-port");
+  if (document.activeElement !== sel) {
+    const want = r.port || "";
+    sel.replaceChildren(
+      ...["", ...r.ports, ...(want && !r.ports.includes(want) ? [want] : [])].map((p) => {
+        const o = document.createElement("option");
+        o.value = p;
+        o.textContent = p || "Auto-detect";
+        o.selected = p === want;
+        return o;
+      }),
+    );
+  }
+  $("receiver-dry").checked = r.dry_run;
+  receiverBusy(r);
+  if (!$("log-pause").checked) renderReceiverLog(r);
+}
+async function loadReceiver() {
+  renderReceiver(await api("/api/receiver"));
+}
+function receiverOptions() {
+  return { dry_run: $("receiver-dry").checked, port: $("receiver-port").value };
+}
+async function receiverApply() {
+  // A changed option only takes effect on a fresh bridge process.
+  if (receiverLast?.running)
+    renderReceiver(await api("/api/receiver/restart", "POST", receiverOptions()));
+}
+$("receiver-dry").addEventListener("change", () => receiverApply().catch((e) => toast(e.message)));
+$("receiver-port").addEventListener("change", () => receiverApply().catch((e) => toast(e.message)));
+$("log-chatter").checked = localStorage.getItem("telem-log-chatter") !== "0";
+$("log-chatter").addEventListener("change", () => {
+  localStorage.setItem("telem-log-chatter", $("log-chatter").checked ? "1" : "0");
+  if (receiverLast) renderReceiverLog(receiverLast);
+});
+$("log-pause").addEventListener("change", () => {
+  if (!$("log-pause").checked && receiverLast) renderReceiverLog(receiverLast);
+});
 $("vital-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   setText("vital-error", "");

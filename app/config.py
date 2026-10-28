@@ -6,6 +6,7 @@ you're running InfluxDB via docker-compose (the default setup this project
 ships with) or against an existing InfluxDB instance you already have.
 """
 import os
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -38,6 +39,11 @@ class Settings:
     vital_username: str = os.getenv("VITAL_USERNAME", "")
     vital_password: str = os.getenv("VITAL_PASSWORD", "")
     vital_campaign_id: str = os.getenv("VITAL_CAMPAIGN_ID", "")
+
+    # Sensors repo holding tools/bridge.py and flash.sh, for the Receiver tab.
+    receiver_dir: str = os.getenv(
+        "RECEIVER_DIR", str(Path(__file__).resolve().parents[2] / "TDS-and-Humidity-Temp-Sensors")
+    )
 
 
 settings = Settings()

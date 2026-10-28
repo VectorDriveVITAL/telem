@@ -460,6 +460,7 @@
         <button class="tab-btn" data-view="incidents">Incidents</button>
         <button class="tab-btn" data-view="analysis">Analysis</button>
         <button class="tab-btn" data-view="vital">VITAL</button>
+        <button class="tab-btn" data-view="receiver">Receiver</button>
       </div>
     </div>
     <div class="top-right">
@@ -510,6 +511,37 @@
       <section class="panel vital-remote-panel">
         <div class="panel-head"><div><div class="panel-title">Data in VITAL</div><div class="panel-sub">Campaign, stations and sensors as vitalapi reports them</div></div><button class="action" data-action="vital-refresh">Refresh</button></div>
         <pre id="vital-remote" class="mono vital-remote">Not loaded.</pre>
+      </section>
+    </main></div>
+
+    <div class="view" id="view-receiver"><main>
+      <div class="overview-heading"><div><h1>Receiver</h1><p class="muted">The serial bridge copies LoRa readings from the board into this dashboard. The board's RX/TX role is set in firmware, so changing it re-flashes the board.</p></div></div>
+      <section class="panel vital-panel receiver-panel">
+        <div class="panel-head"><div><div class="panel-title">Bridge</div><div class="panel-sub" id="receiver-state">Loading…</div></div></div>
+        <div class="receiver-link mono" id="receiver-link"></div>
+        <div class="vital-actions receiver-actions">
+          <button class="action primary" data-action="receiver-start">Start</button>
+          <button class="action" data-action="receiver-restart">Restart</button>
+          <button class="action danger" data-action="receiver-stop">Stop</button>
+          <span class="receiver-spacer"></span>
+          <button class="action" data-action="receiver-mode" data-id="rx">RX</button>
+          <button class="action" data-action="receiver-mode" data-id="tx">TX</button>
+        </div>
+        <div class="receiver-options">
+          <label>Serial port <select id="receiver-port"></select></label>
+          <label><input type="checkbox" id="receiver-dry"> Dry run (parse and log, don't post to telem)</label>
+        </div>
+      </section>
+      <section class="panel vital-remote-panel">
+        <div class="panel-head"><div><div class="panel-title">Bridge output</div></div>
+          <div class="receiver-tools">
+            <label><input type="checkbox" id="log-chatter" checked> Board chatter</label>
+            <label><input type="checkbox" id="log-pause"> Pause</label>
+            <button class="action" data-action="receiver-copy">Copy</button>
+            <button class="action" data-action="receiver-clear">Clear</button>
+          </div>
+        </div>
+        <pre id="receiver-log" class="mono vital-remote receiver-log">Loading…</pre>
       </section>
     </main></div>
 

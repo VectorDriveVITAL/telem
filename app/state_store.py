@@ -23,6 +23,9 @@ def _connect():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS vital (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS receiver (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+    )
     return conn
 
 
@@ -55,4 +58,19 @@ def save_vital(creds):
             conn.execute(
                 "INSERT INTO vital VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (json.dumps(creds),),
+            )
+
+
+def load_receiver():
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT payload FROM receiver WHERE id = 1").fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def save_receiver(data):
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO receiver VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (json.dumps(data),),
             )

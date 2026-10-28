@@ -972,23 +972,70 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.receiver-log .l-err {
+.receiver-log > span {
+  display: block;
+}
+.receiver-log .l-err,
+.receiver-log .t-q-bad {
   color: var(--red);
 }
-.receiver-log .l-warn {
+.receiver-log .l-warn,
+.receiver-log .t-q-ok {
   color: var(--amber);
 }
-.receiver-log .l-sent {
+.receiver-log .l-sent,
+.receiver-log .t-q-good {
   color: var(--green);
 }
 .receiver-log .l-rx,
+.receiver-log .t-seq,
+.receiver-log .t-val {
+  color: var(--text-hi);
+}
+.receiver-log .l-dry,
+.receiver-log .t-tag-dry {
+  color: var(--blue);
+}
+.receiver-log .l-conn,
+.receiver-log .t-port {
+  color: var(--teal);
+}
 .receiver-log .l-telem {
-  color: var(--text);
+  color: var(--amber);
 }
 .receiver-log .l-chatter,
-.receiver-log .l-flash {
-  color: var(--text-dim, var(--text-mid));
-  opacity: 0.75;
+.receiver-log .l-hb,
+.receiver-log .l-flash,
+.receiver-log .t-time,
+.receiver-log .t-src {
+  color: var(--text-low);
+}
+.receiver-log .t-act {
+  font-weight: 700;
+}
+.receiver-log .t-seq,
+.receiver-log .t-tag-dry {
+  font-weight: 700;
+}
+.receiver-log .l-mark-err,
+.receiver-log .l-mark-warn,
+.receiver-log .l-mark-info {
+  margin: 2px 0;
+  padding: 1px 8px;
+  border-left: 3px solid currentColor;
+  font-weight: 700;
+}
+.receiver-log .l-mark-err {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.receiver-log .l-mark-info {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+}
+.receiver-log .l-mark-warn {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 .receiver-options label,
 .receiver-tools label {
@@ -1005,4 +1052,72 @@ body {
 .receiver-options select {
   margin: 0;
   width: auto;
+}
+
+.rx-data {
+  margin-top: 16px;
+}
+.rx-label {
+  padding: 12px 14px 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-low);
+}
+.rx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  padding: 10px 14px 14px;
+}
+.rx-empty {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-mid);
+}
+.rx-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.rx-tile:hover,
+.rx-tile:focus-visible {
+  border-color: var(--amber);
+  outline: none;
+}
+.rx-name {
+  font-size: 11px;
+  color: var(--text-mid);
+}
+.rx-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.rx-value small {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-mid);
+}
+.rx-spark {
+  width: 100%;
+  height: 32px;
+}
+.rx-spark path {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+.rx-service .rx-spark path {
+  stroke: var(--teal);
 }

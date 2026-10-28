@@ -2,6 +2,7 @@
 "use strict";
 import { animate as aAnimate } from "./anime.esm.js";
 import { animate as mAnimate } from "./motion.esm.js";
+import { describeLog } from "./receiver-log.js";
 // This build of motion.dev takes tween "duration" in seconds; every other
 // animation call in this file (anime.js, native Element.animate) is in
 // milliseconds, so this keeps every duration below written in ms.
@@ -906,9 +907,12 @@ function switchTab(tab, updateHash = true, load = true) {
     loadVitalRemote();
   }
   clearInterval(receiverTimer);
+  clearInterval(receiverGraphTimer);
   if (tab === "receiver") {
     loadReceiver().catch((e) => toast(e.message));
     receiverTimer = setInterval(() => loadReceiver().catch(() => {}), 3000);
+    loadReceiverGraphs().catch(() => {});
+    receiverGraphTimer = setInterval(() => loadReceiverGraphs().catch(() => {}), 10000);
   }
   if (load && charts[tab]) loadChart(tab).catch((e) => toast(e.message));
   if (updateHash) writeHash();
@@ -1823,12 +1827,22 @@ async function handleAction(button) {
     renderReceiver(await api("/api/receiver/stop", "POST"));
     return;
   }
+  if (a === "receiver-open") {
+    if (button.dataset.kind === "service") await selectSource("service", RX_SERVICE);
+    else {
+      S.metric = button.dataset.id;
+      await selectSource("sensor", RX_BUOY);
+    }
+    return;
+  }
   if (a === "receiver-clear") {
     renderReceiver(await api("/api/receiver/log", "DELETE"));
     return;
   }
   if (a === "receiver-copy") {
-    await navigator.clipboard.writeText($("receiver-log").textContent);
+    await navigator.clipboard.writeText(
+      [...$("receiver-log").children].map((row) => row.textContent).join("\n"),
+    );
     toast("Bridge output copied.");
     return;
   }
@@ -2243,17 +2257,101 @@ async function loadVitalRemote() {
     el.textContent = err.message;
   }
 }
-let receiverTimer, receiverLast;
-const ROLE_CLASSES = [
-  ["err", /FAIL|ERROR|Traceback|serial lost|not found|timed out/i],
-  ["warn", /\bskip\b|waiting for|no device|no ST-LINK|backlog|listening, 0 /i],
-  ["sent", /\| sent \|/],
-  ["rx", /LoRa [RT]X #|DRY {2}\|/],
-  ["telem", /\[telem\]/],
-  ["flash", /flash \|/],
+let receiverTimer, receiverGraphTimer, receiverLast;
+const RX_BUOY = "buoy-01"; // the bridge's default buoy id
+const RX_SERVICE = "lora-receiver"; // registered by the server from the packets' arrival
+const RX_LABELS = {
+  total_dissolved_solids: "TDS",
+  conductivity: "Conductivity",
+  temp: "Water temp",
+  air_temp: "Air temp",
+  humidity: "Air humidity",
+  core_temp: "Hull temp",
+  core_humidity: "Hull humidity",
+  pressure: "Pressure",
+  signal_dbm: "Signal (RSSI)",
+  ph: "pH",
+  turbidity: "Turbidity",
+};
+const RX_HEALTH = [
+  ["latency_ms", "Packet interval", (v) => [(v / 1000).toFixed(1), "s"]],
+  ["rps", "Packet rate", (v) => [v.toFixed(2), "/s"]],
+  ["error_rate", `Loss, last 20 packets`, (v) => [v.toFixed(0), "%"]],
 ];
-function logClass(line) {
-  return ROLE_CLASSES.find(([, re]) => re.test(line))?.[0] || "chatter";
+function rxTile(kind, key, label, value, unit, points) {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "rx-tile rx-" + kind;
+  tile.dataset.action = "receiver-open";
+  tile.dataset.kind = kind;
+  tile.dataset.id = key;
+  tile.title =
+    kind === "service"
+      ? "Open in Service health (packet interval appears there as latency, packet rate as rps, loss as error rate)"
+      : "Open in Sensor telemetry";
+  const name = document.createElement("span"),
+    val = document.createElement("span"),
+    small = document.createElement("small"),
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  name.className = "rx-name";
+  name.textContent = label;
+  val.className = "rx-value";
+  val.append(value ?? "—");
+  small.textContent = value === null ? "" : unit;
+  val.append(small);
+  svg.setAttribute("class", "rx-spark");
+  svg.setAttribute("viewBox", "0 0 260 32");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-hidden", "true");
+  path.id = `rx-spark-${kind}-${key}`;
+  svg.append(path);
+  tile.append(name, val, svg);
+  tile._points = points;
+  return tile;
+}
+function rxFill(grid, tiles, empty) {
+  grid.replaceChildren(...tiles);
+  if (!tiles.length) {
+    const p = document.createElement("div");
+    p.className = "rx-empty";
+    p.textContent = empty;
+    grid.append(p);
+  }
+  for (const t of tiles) drawSpark(t.querySelector("path").id, t._points);
+}
+async function loadReceiverGraphs() {
+  const b = getBuoy(RX_BUOY),
+    svc = getService(RX_SERVICE),
+    live = (b ? Object.entries(b.sensors) : [])
+      .filter(([, x]) => !x.simulated)
+      .map(([k, x]) => [k, x.value, x.unit]);
+  if (b && b.field_metadata.signal_dbm && !b.field_metadata.signal_dbm.simulated)
+    live.push(["signal_dbm", b.signal_dbm, "dBm"]);
+  const history = (path, metrics) =>
+    api(`${path}/timeseries?metrics=${metrics.join(",")}&minutes=30&aggregation=mean&interval_seconds=30`);
+  const [bh, sh] = await Promise.all([
+    live.length ? history(`/api/buoys/${RX_BUOY}`, live.map((r) => r[0])) : null,
+    svc ? history(`/api/services/${RX_SERVICE}`, RX_HEALTH.map((h) => h[0])) : null,
+  ]);
+  const series = (h, key) => (h ? h.points.map((p) => ({ time: p.time, value: p.values[key] })) : []);
+  rxFill(
+    $("rx-health"),
+    svc
+      ? RX_HEALTH.map(([key, label, fmt]) => {
+          const [v, unit] = svc[key] === null || svc[key] === undefined ? [null, ""] : fmt(svc[key]);
+          return rxTile("service", key, label, v, unit, series(sh, key));
+        })
+      : [],
+    "Waiting for the first radio packet.",
+  );
+  rxFill(
+    $("rx-sensors"),
+    live.map(([key, value, unit]) =>
+      rxTile("sensor", key, RX_LABELS[key] || pretty(key), number(value), unit, series(bh, key)),
+    ),
+    "No real sensor readings yet. Start the bridge (not dry run) once packets are arriving.",
+  );
 }
 function receiverBusy(r) {
   document
@@ -2262,16 +2360,23 @@ function receiverBusy(r) {
 }
 function renderReceiverLog(r) {
   const log = $("receiver-log");
-  const showChatter = $("log-chatter").checked;
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
   const frag = document.createDocumentFragment();
-  for (const line of r.log) {
-    const cls = logClass(line);
-    if (cls === "chatter" && !showChatter) continue;
-    const span = document.createElement("span");
-    span.className = "l-" + cls;
-    span.textContent = line + "\n";
-    frag.append(span);
+  for (const row of describeLog(r.log, $("log-chatter").checked)) {
+    const line = document.createElement("span");
+    line.className = "l-" + row.cls;
+    for (const p of row.parts) {
+      if (!p.c) {
+        line.append(p.t);
+        continue;
+      }
+      const tok = document.createElement("span");
+      tok.className = "t-" + p.c;
+      tok.textContent = p.t;
+      if (p.title) tok.title = p.title;
+      line.append(tok);
+    }
+    frag.append(line);
   }
   log.replaceChildren(frag);
   if (!r.log.length) log.textContent = "No bridge output yet.";

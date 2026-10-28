@@ -532,6 +532,13 @@
           <label><input type="checkbox" id="receiver-dry"> Dry run (parse and log, don't post to telem)</label>
         </div>
       </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Incoming data</div><div class="panel-sub">Last 30 minutes. Click a graph to open it in Service health or Sensor telemetry.</div></div></div>
+        <div class="rx-label">Link health</div>
+        <div class="rx-grid" id="rx-health"></div>
+        <div class="rx-label">Sensors</div>
+        <div class="rx-grid" id="rx-sensors"></div>
+      </section>
       <section class="panel vital-remote-panel">
         <div class="panel-head"><div><div class="panel-title">Bridge output</div></div>
           <div class="receiver-tools">

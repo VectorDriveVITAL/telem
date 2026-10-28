@@ -40,6 +40,13 @@ class Settings:
     vital_password: str = os.getenv("VITAL_PASSWORD", "")
     vital_campaign_id: str = os.getenv("VITAL_CAMPAIGN_ID", "")
 
+    # Which buoy and service the bridge's readings and link health belong to.
+    receiver_buoy: str = os.getenv("RECEIVER_BUOY", "buoy-01")
+    receiver_service: str = os.getenv("RECEIVER_SERVICE", "lora-receiver")
+    # When set, the bridge, flash and calibration controls need `Authorization: Bearer <token>`;
+    # when empty they only accept same-origin requests from this computer.
+    receiver_token: str = os.getenv("RECEIVER_TOKEN", "")
+
     # Sensors repo holding tools/bridge.py and flash.sh, for the Receiver tab.
     receiver_dir: str = os.getenv(
         "RECEIVER_DIR", str(Path(__file__).resolve().parents[2] / "TDS-and-Humidity-Temp-Sensors")

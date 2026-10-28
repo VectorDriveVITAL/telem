@@ -1121,3 +1121,222 @@ body {
 .rx-service .rx-spark path {
   stroke: var(--teal);
 }
+
+.rx-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.rx-stat .rx-value.warn,
+.rx-stat .rx-value.crit {
+  color: var(--amber);
+}
+.rx-stat .rx-value.crit {
+  color: var(--red);
+}
+.rx-sub {
+  font-size: 11px;
+  color: var(--text-low);
+}
+.rx-hists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 16px;
+  padding-right: 14px;
+}
+.rx-hist {
+  padding: 8px 14px 4px;
+}
+.rx-hist svg {
+  width: 100%;
+  height: 84px;
+}
+.rx-hist rect {
+  fill: var(--amber);
+  opacity: 0.8;
+}
+.rx-hist rect:hover {
+  opacity: 1;
+}
+.rx-hist text {
+  fill: var(--text-low);
+  font-size: 9px;
+}
+.rx-events {
+  margin: 0;
+  padding: 8px 14px 14px;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-mid);
+}
+.rx-events .bad {
+  color: var(--red);
+}
+.rx-tablewrap {
+  overflow-x: auto;
+  padding: 0 14px;
+}
+.rx-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.rx-table th {
+  text-align: left;
+  padding: 8px 10px 6px 0;
+  font-weight: 400;
+  color: var(--text-low);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.rx-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-mid);
+  white-space: nowrap;
+}
+.rx-table td:first-child {
+  color: var(--text-hi);
+}
+.rx-flag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--amber);
+  border: 1px solid var(--amber-dim);
+}
+.receiver-tools input[type="search"] {
+  width: 160px;
+  padding: 4px 8px;
+}
+.receiver-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 10px;
+}
+.receiver-chips button {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-mid);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.receiver-chips button[aria-pressed="true"] {
+  color: var(--text-hi);
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+}
+.receiver-logwrap {
+  position: relative;
+}
+#log-jump {
+  position: absolute;
+  right: 22px;
+  bottom: 14px;
+}
+.receiver-log:empty::before {
+  content: "No bridge output yet.";
+  color: var(--text-low);
+}
+.receiver-log .l-session {
+  margin: 8px 0 2px;
+  padding: 2px 0;
+  color: var(--text-mid);
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.receiver-log .l-mark-info + .l-mark-info {
+  margin-top: 0;
+}
+
+.receiver-options span {
+  color: var(--text-low);
+}
+.rx-calnote {
+  padding: 0 14px 12px;
+  margin: 0;
+  color: var(--red);
+}
+.rx-table input {
+  width: 84px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+}
+.rx-table .action {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.rx-timeline svg {
+  height: 70px;
+}
+.rx-timeline rect.lost {
+  fill: var(--red);
+}
+.rx-timeline rect.quiet {
+  fill: var(--text-low);
+  opacity: 0.45;
+}
+.rx-spark path.raw {
+  stroke: var(--text-mid);
+  opacity: 0.4;
+  stroke-width: 1;
+}
+.rx-packet {
+  margin: 0 14px 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-mid);
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.rx-packet h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-hi);
+}
+.rx-packet dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px 16px;
+  margin: 0;
+}
+.rx-packet dt {
+  color: var(--text-low);
+}
+.rx-packet dd {
+  margin: 0 0 4px;
+  color: var(--text-hi);
+}
+a.action {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.receiver-log .t-toggle {
+  color: var(--blue);
+  cursor: pointer;
+}
+.receiver-log .l-dry,
+.receiver-log .l-rx {
+  cursor: pointer;
+}
+.receiver-log .rx-json {
+  display: block;
+  margin: 4px 0 6px 12px;
+  white-space: pre-wrap;
+  color: var(--text-mid);
+}

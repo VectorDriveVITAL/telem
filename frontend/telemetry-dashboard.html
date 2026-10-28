@@ -531,24 +531,72 @@
           <label>Serial port <select id="receiver-port"></select></label>
           <label><input type="checkbox" id="receiver-dry"> Dry run (parse and log, don't post to telem)</label>
         </div>
+        <div class="receiver-options" id="receiver-alerts">
+          <span>Raise alerts for</span>
+          <label><input type="checkbox" data-alert="link"> Link problems</label>
+          <label><input type="checkbox" data-alert="hull"> Hull moisture</label>
+          <label><input type="checkbox" data-alert="stuck"> Stuck sensors</label>
+        </div>
       </section>
       <section class="panel rx-data">
-        <div class="panel-head"><div><div class="panel-title">Incoming data</div><div class="panel-sub">Last 30 minutes. Click a graph to open it in Service health or Sensor telemetry.</div></div></div>
+        <div class="panel-head"><div><div class="panel-title">Incoming data</div><div class="panel-sub">Last hour. Click a graph to open it in Service health or Sensor telemetry.</div></div></div>
         <div class="rx-label">Link health</div>
         <div class="rx-grid" id="rx-health"></div>
         <div class="rx-label">Sensors</div>
         <div class="rx-grid" id="rx-sensors"></div>
       </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Link analytics</div><div class="panel-sub">Radio link quality from every packet received. Margins and range are estimates for SF7 / 125 kHz.</div></div></div>
+        <div class="rx-label" id="rx-tx-label" hidden>Transmitter (this board is sending)</div>
+        <div class="rx-grid" id="rx-tx-cards" hidden></div>
+        <div class="rx-grid" id="rx-link-cards"></div>
+        <div class="rx-hists">
+          <div><div class="rx-label">RSSI (dBm), last 24 h</div><div id="rx-hist-rssi" class="rx-hist"></div></div>
+          <div><div class="rx-label">SNR (dB), last 24 h</div><div id="rx-hist-snr" class="rx-hist"></div></div>
+        </div>
+        <div class="rx-label">Packets lost per half hour, last 24 h</div>
+        <div id="rx-timeline" class="rx-hist rx-timeline"></div>
+        <div class="rx-label">Recent loss events</div>
+        <ul class="rx-events mono" id="rx-events"></ul>
+      </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Pipeline health</div><div class="panel-sub">From the bridge to telem, for this bridge session.</div></div></div>
+        <div class="rx-grid" id="rx-pipe-cards"></div>
+      </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Sensor analytics</div><div class="panel-sub">Readings from the board over the chosen window. Flags point at sensors worth checking.</div></div>
+          <div class="receiver-tools" id="rx-window" role="group" aria-label="Window">
+            <button class="range-btn active" data-minutes="60">1 h</button>
+            <button class="range-btn" data-minutes="360">6 h</button>
+            <button class="range-btn" data-minutes="1440">24 h</button>
+          </div></div>
+        <div class="rx-tablewrap"><table class="rx-table" id="rx-analytics"></table></div>
+        <div class="rx-label">Derived</div>
+        <div class="rx-grid" id="rx-derived"></div>
+      </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Calibration</div><div class="panel-sub">Stored value = reading × scale + offset. Applies to new readings only; history keeps the values it was recorded with.</div></div></div>
+        <div class="rx-tablewrap"><table class="rx-table" id="rx-calibration"></table></div>
+        <p class="rx-sub rx-calnote" id="rx-cal-error" role="alert"></p>
+      </section>
       <section class="panel vital-remote-panel">
         <div class="panel-head"><div><div class="panel-title">Bridge output</div></div>
           <div class="receiver-tools">
-            <label><input type="checkbox" id="log-chatter" checked> Board chatter</label>
+            <input type="search" id="log-search" placeholder="Search output" aria-label="Search bridge output">
+            <label><input type="checkbox" id="log-session"> This session only</label>
             <label><input type="checkbox" id="log-pause"> Pause</label>
             <button class="action" data-action="receiver-copy">Copy</button>
+            <a class="action" href="/api/receiver/export?kind=log" download>Export log</a>
+            <a class="action" href="/api/receiver/export?kind=packets" download>Export packets</a>
             <button class="action" data-action="receiver-clear">Clear</button>
           </div>
         </div>
-        <pre id="receiver-log" class="mono vital-remote receiver-log">Loading…</pre>
+        <div class="receiver-chips" id="log-chips" role="group" aria-label="Show"></div>
+        <div class="rx-packet" id="rx-packet" hidden></div>
+        <div class="receiver-logwrap">
+          <pre id="receiver-log" class="mono vital-remote receiver-log"></pre>
+          <button type="button" class="action primary" id="log-jump" hidden>↓ Latest</button>
+        </div>
       </section>
     </main></div>
 

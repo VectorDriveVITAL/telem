@@ -26,6 +26,9 @@ def _connect():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS receiver (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS calibration (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)"
+    )
     return conn
 
 
@@ -73,4 +76,19 @@ def save_receiver(data):
             conn.execute(
                 "INSERT INTO receiver VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (json.dumps(data),),
+            )
+
+
+def load_calibration():
+    with closing(_connect()) as conn:
+        row = conn.execute("SELECT payload FROM calibration WHERE id = 1").fetchone()
+    return json.loads(row[0]) if row else {}
+
+
+def save_calibration(table):
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO calibration VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (json.dumps(table),),
             )

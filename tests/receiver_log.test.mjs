@@ -1,7 +1,7 @@
 // Run with: node --test tests/receiver_log.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeLog, highlight, parseRow, rowClass } from "../frontend/receiver-log.js";
+import { createDescriber, describeLog, highlight, parseRow, rowCategory, rowClass } from "../frontend/receiver-log.js";
 
 const text = (row) => row.parts.map((p) => p.t).join("");
 const part = (parts, t) => parts.find((p) => p.t === t);
@@ -86,12 +86,56 @@ test("a bridge restart does not count as lost packets", () => {
   assert.equal(rows.filter((r) => r.cls.startsWith("mark-")).length, 0);
 });
 
-test("chatter and heartbeat lines can be hidden but errors and markers stay", () => {
-  const lines = [
-    "10:00:00  board   log      rak> OK",
-    "10:00:01  board   idle     listening, 3 packets so far",
-    "10:00:02  bridge  fail     HTTP 500 - spooled",
-  ];
-  assert.equal(describeLog(lines, true).length, 3);
-  assert.deepEqual(describeLog(lines, false).map((r) => r.cls), ["err"]);
+test("rows fall into the console's filter groups, problems always as issues", () => {
+  const cat = rowCategory;
+  assert.equal(cat(RX("10:00:00", 1)), "packets");
+  assert.equal(cat("10:00:00  board   tx       #5  V1"), "packets");
+  assert.equal(cat("10:00:00  bridge  post     1 ppm  (HTTP 200)"), "posts");
+  assert.equal(cat("10:00:00  bridge  dry      POST {}"), "posts");
+  assert.equal(cat("10:00:00  bridge  fail     HTTP 500"), "issues");
+  assert.equal(cat("10:00:00  board   warn     waiting for probe"), "issues");
+  assert.equal(cat("10:00:00  bridge  serial   serial lost (x)"), "issues");
+  assert.equal(cat("10:00:00  telem   stop     bridge"), "system");
+  assert.equal(cat("10:00:00  bridge  connect  /dev/x @ 115200"), "system");
+  assert.equal(cat("10:00:00  flash   out      done"), "system");
+  assert.equal(cat("10:00:00  board   log      rak> OK"), "board");
+  assert.equal(cat("10:00:00  board   idle     listening, 3 packets so far"), "board");
+});
+
+test("a bridge start becomes a session divider and markers carry a category", () => {
+  const d = createDescriber();
+  const [row] = d.push("10:24:09  telem   start    bridge -> http://127.0.0.1:8000");
+  assert.equal(row.cls, "session");
+  assert.equal(row.session, true);
+  assert.equal(text(row), "bridge session 10:24:09   bridge -> http://127.0.0.1:8000");
+  d.push(RX("10:24:10", 5));
+  const [early] = d.push(RX("10:24:30", 9)); // still connecting: informational
+  assert.equal(early.cat, "packets");
+  d.push(RX("10:24:35", 10));
+  d.push(RX("10:24:40", 11));
+  const [lost] = d.push(RX("10:24:50", 14));
+  assert.equal(lost.cat, "issues");
+});
+
+test("pushing line by line gives the same rows as describing them all at once", () => {
+  const lines = [RX("10:00:00", 10), RX("10:00:05", 11), RX("10:00:20", 14)];
+  const d = createDescriber();
+  assert.deepEqual(lines.flatMap((l) => d.push(l)), describeLog(lines));
+});
+
+test("a dry-run payload collapses to a summary and keeps its JSON", () => {
+  const d = createDescriber();
+  const [row] = d.push('10:25:40  bridge  dry      POST {"time": "2026-10-28T15:25:40Z", "temp": 21.7, "ph": 7.5}');
+  assert.deepEqual(row.json, { time: "2026-10-28T15:25:40Z", temp: 21.7, ph: 7.5 });
+  assert.equal(text(row), "10:25:40  bridge  dry      POST 3 fields  ▸ show");
+  assert.equal(row.parts.at(-1).c, "toggle");
+  const [broken] = d.push("10:25:41  bridge  dry      POST {not json");
+  assert.equal(broken.json, undefined); // a cut-off line is shown as it is
+});
+
+test("receive rows carry the packet they describe", () => {
+  const d = createDescriber();
+  const rows = d.push(RX("10:24:10", 11));
+  assert.deepEqual(rows.at(-1).packet, { seq: 11, time: "10:24:10" });
+  assert.equal(d.push("10:24:10  bridge  post     1 ppm  (HTTP 200)").at(-1).packet, undefined);
 });

@@ -8,7 +8,12 @@ running the repo's flash.sh, then starting the bridge again.
 
 import collections
 import glob
+import json
+import math
+import os
 import re
+import signal
+import statistics
 import subprocess
 import threading
 import time
@@ -23,7 +28,16 @@ FLASH_TIMEOUT = 180
 # Connecting flushes whatever the board buffered and skips what it overflowed, so the first
 # few packets after a (re)connect can jump in seq without that being a lossy link.
 FRESH_PACKETS = 3
-HEALTH_SERVICE = "lora-receiver"
+# Radio facts for the link maths. Sensitivity and SNR floor are the SX126x/SX127x figures for
+# SF7 at 125 kHz; TX power, frequency and the send period come from the buoy firmware (lora.h).
+SENSITIVITY_DBM = -123
+SNR_FLOOR_DB = -7.5
+TX_DBM = 14
+FREQ_MHZ = 915
+TX_PERIOD_S = 5
+PACKET_KEEP_S = 24 * 3600
+PACKET_FILE_MAX = 3_000_000
+WATCH_SECONDS = 10  # how often the watchdog and the alert evaluator run
 HEALTH_WINDOW = 20  # packets the loss rate is measured over
 RATE_WINDOW_S = 60
 LOG_LINES = 1000
@@ -34,6 +48,7 @@ PORT_GLOBS = ("/dev/tty.usbmodem*", "/dev/ttyACM*")
 
 _RX = re.compile(r"LoRa RX #(\d+)\s+RSSI (-?\d+) dBm\s+SNR (-?\d+)")
 _TX = re.compile(r"LoRa TX #(\d+)")
+_AWAKE = re.compile(r"awake (\d+) ms \(duty ([\d.]+) %\)")
 _CONNECTED = re.compile(r"connected to (\S+) @")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -51,10 +66,60 @@ _mode = None  # the role last flashed from here; the board itself cannot be aske
 _flashing = None
 _dry_run = False
 _port = None  # None = let the bridge find the ST-LINK itself
+_keep = False  # the operator wants the bridge running: autostart it and restart it if it dies
+_alerts = {"link": True, "hull": True, "stuck": False}  # which analytics may raise telem alerts
+_prefs_loaded = False
+_started_at = 0.0
+_backoff = 0.0
+_next_restart = 0.0
+_stop_watch = threading.Event()
+_watchdog = None
 _connected = None
 _link = {}
+_added = 0  # lines ever logged: lets the dashboard ask only for what is new
+_epoch = time.time_ns()  # changes when the log is cleared, so the dashboard starts over
+_packets = collections.deque(maxlen=PACKET_KEEP_S // TX_PERIOD_S + 1000)
+_packets_loaded = False
+_pipe = {}
 _outcomes = collections.deque(maxlen=HEALTH_WINDOW)  # True = packet arrived, False = one was lost
 _arrivals = collections.deque()  # time of each recent packet
+
+
+def service_name():
+    return settings.receiver_service
+
+
+def _load_prefs():
+    global _prefs_loaded, _mode, _keep, _dry_run, _port, _base_url
+    if _prefs_loaded:
+        return
+    _prefs_loaded = True
+    p = state_store.load_receiver() or {}
+    _mode = p.get("mode", _mode)
+    _keep = bool(p.get("keep", False))
+    _dry_run = bool(p.get("dry_run", _dry_run))
+    _port = p.get("port", _port)
+    _base_url = p.get("base_url", _base_url)
+    _alerts.update({k: bool(v) for k, v in (p.get("alerts") or {}).items() if k in _alerts})
+
+
+def _save_prefs():
+    state_store.save_receiver({
+        "mode": _mode, "keep": _keep, "dry_run": _dry_run, "port": _port,
+        "base_url": _base_url, "alerts": _alerts,
+    })
+
+
+def set_alerts(**flags):
+    """Choose which analytics may raise telem alerts: link, hull, stuck."""
+    unknown = set(flags) - set(_alerts)
+    if unknown:
+        raise ValueError(f"unknown alert group: {', '.join(sorted(unknown))}")
+    with _lock:
+        _load_prefs()
+        _alerts.update({k: bool(v) for k, v in flags.items() if v is not None})
+        _save_prefs()
+        return dict(_alerts)
 
 
 def _dir():
@@ -85,8 +150,187 @@ def _load_log():
     try:
         with open(_logfile(), encoding="utf-8", errors="replace") as f:
             _log.extend(_canon(l.rstrip("\n")) for l in collections.deque(f, maxlen=LOG_LINES))
+            global _added
+            _added += len(_log)
     except OSError:
         pass
+
+
+def _packetfile():
+    return Path(settings.state_db).parent / "packets.ndjson"
+
+
+def _load_packets():
+    global _packets_loaded
+    if _packets_loaded:
+        return
+    _packets_loaded = True
+    cutoff = time.time() - PACKET_KEEP_S
+    try:
+        with open(_packetfile(), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue  # a half-written last line
+                if rec["t"] >= cutoff:
+                    _packets.append(rec)
+    except OSError:
+        pass
+
+
+def _packets_after_load():
+    _load_packets()
+    return list(_packets)
+
+
+def _record_packet(rec):
+    _load_packets()
+    _packets.append(rec)
+    try:
+        path = _packetfile()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
+def _trim_packets():
+    """Rewrite the file with only the last 24 h once it grows large; run at bridge start."""
+    try:
+        if _packetfile().stat().st_size <= PACKET_FILE_MAX:
+            return
+    except OSError:
+        return
+    _load_packets()
+    cutoff = time.time() - PACKET_KEEP_S
+    keep = [r for r in _packets if r["t"] >= cutoff]
+    _packets.clear()
+    _packets.extend(keep)
+    _packetfile().write_text("".join(json.dumps(r) + "\n" for r in keep), encoding="utf-8")
+
+
+def _histogram(values, width):
+    """Counts per `width`-wide bin, contiguous from the lowest to the highest populated bin."""
+    if not values:
+        return {"lo": 0, "width": width, "counts": []}
+    lo = math.floor(min(values) / width) * width
+    counts = [0] * (int(math.floor(max(values) / width) * width - lo) // width + 1)
+    for v in values:
+        counts[int((math.floor(v / width) * width - lo) // width)] += 1
+    return {"lo": lo, "width": width, "counts": counts}
+
+
+def _summary(values):
+    return {"min": min(values), "avg": round(statistics.fmean(values), 1), "max": max(values)} if values else None
+
+
+def _window(recs, now, seconds):
+    sel = [r for r in recs if r["t"] >= now - seconds]
+    received, lost = len(sel), sum(r["lost"] for r in sel)
+    # Intervals only between neighbours that arrived normally: not across connect bursts,
+    # buoy restarts or a stretch with the bridge off.
+    gaps = [
+        b["t"] - a["t"]
+        for a, b in zip(sel, sel[1:])
+        if not (a["fresh"] or b["fresh"] or b["restart"]) and 0 < b["t"] - a["t"] <= 60
+    ]
+    return {
+        "received": received,
+        "lost": lost,
+        "pdr": round(100 * received / (received + lost), 2) if received else None,
+        "rssi": _summary([r["rssi"] for r in sel]),
+        "snr": _summary([r["snr"] for r in sel]),
+        "interval_s": {"mean": round(statistics.fmean(gaps), 2), "jitter": round(statistics.pstdev(gaps), 2),
+                       "max": round(max(gaps), 1)} if gaps else None,
+        "restarts": sum(1 for r in sel if r["restart"]),
+        "events": [
+            {"t": r["t"], "lost": r["lost"], "from": r["seq"] - r["lost"], "to": r["seq"] - 1, "restart": r["restart"]}
+            for r in sel if r["lost"] or r["restart"]
+        ][-15:],
+    }
+
+
+def _timeline(recs, now, buckets=48, width=1800):
+    """Received and lost packets per half hour over the last 24 h, oldest first."""
+    start = now - buckets * width
+    out = [{"t": start + i * width, "received": 0, "lost": 0} for i in range(buckets)]
+    for r in recs:
+        i = int((r["t"] - start) // width)
+        if 0 <= i < buckets:
+            out[i]["received"] += 1
+            out[i]["lost"] += r["lost"]
+    return out
+
+
+def packets(seq=None, limit=100):
+    """Recent stored packets, newest first, optionally only those with one sequence number."""
+    _load_packets()
+    recs = [r for r in reversed(_packets) if seq is None or r["seq"] == seq]
+    return recs[:limit]
+
+
+def export_packets_csv():
+    _load_packets()
+    rows = ["time,seq,rssi_dbm,snr_db,lost_before,after_connect,buoy_restart"]
+    for r in _packets:
+        t = datetime.fromtimestamp(r["t"]).astimezone().isoformat(timespec="seconds")
+        rows.append(f"{t},{r['seq']},{r['rssi']},{r['snr']},{r['lost']},{int(r['fresh'])},{int(r['restart'])}")
+    return "\n".join(rows) + "\n"
+
+
+def export_log_text():
+    _load_log()
+    return "\n".join(_log) + "\n"
+
+
+def _spool_backlog():
+    try:
+        with open(Path(settings.receiver_dir).expanduser() / "tools" / "spool.ndjson", encoding="utf-8") as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+def stats(now=None):
+    """Link and pipeline analytics from the stored packets and this session's post counters."""
+    now = time.time() if now is None else now
+    _load_packets()
+    recs = list(_packets)
+    last = recs[-1] if recs else None
+    day = [r for r in recs if r["t"] >= now - 86400]
+    current = None
+    if last:
+        path_loss = TX_DBM - last["rssi"]  # antenna gains ignored
+        metres = 1000 * 10 ** ((path_loss - 20 * math.log10(FREQ_MHZ) - 32.44) / 20)
+        current = {
+            "rssi": last["rssi"], "snr": last["snr"],
+            "rssi_margin_db": last["rssi"] - SENSITIVITY_DBM,
+            "snr_margin_db": last["snr"] - SNR_FLOOR_DB,
+            "range_m_estimate": round(metres, 1),
+            "buoy_uptime_s_estimate": last["seq"] * TX_PERIOD_S,
+            "age_s": round(now - last["t"], 1),
+        }
+    ms = sorted(_pipe["ms"])
+    return {
+        "windows": {"1h": _window(recs, now, 3600), "24h": _window(recs, now, 86400)},
+        "current": current,
+        "timeline": _timeline(recs, now),
+        "rssi_hist": _histogram([r["rssi"] for r in day], 10),
+        "snr_hist": _histogram([r["snr"] for r in day], 3),
+        "pipeline": {
+            "posted": _pipe["ok"], "failed": _pipe["fail"], "dry": _pipe["dry"], "skipped": _pipe["skip"],
+            "success_pct": round(100 * _pipe["ok"] / (_pipe["ok"] + _pipe["fail"]), 1) if _pipe["ok"] + _pipe["fail"] else None,
+            # Packets that left no trace in the bridge output: neither posted, failed, skipped nor dry.
+            "unaccounted": max(0, _link["received"] - _pipe["ok"] - _pipe["fail"] - _pipe["dry"] - _pipe["skip"]),
+            "post_ms": {"avg": round(statistics.fmean(ms)), "p95": ms[min(len(ms) - 1, int(len(ms) * 0.95))],
+                        "n": len(ms)} if ms else None,
+            "spool_backlog": _spool_backlog(),
+            "received": _link["received"],
+        },
+        "constants": {"sensitivity_dbm": SENSITIVITY_DBM, "snr_floor_db": SNR_FLOOR_DB, "tx_dbm": TX_DBM},
+    }
 
 
 def _push_service(**fields):
@@ -95,12 +339,13 @@ def _push_service(**fields):
     second, error_rate = % of the last packets that never arrived."""
     from . import generator
 
-    if not generator.get_service_state(HEALTH_SERVICE):
+    name = service_name()
+    if not generator.get_service_state(name):
         try:  # the buoy sends every ~5 s: one missed packet is a warning, three a critical
-            generator.register_service(HEALTH_SERVICE, warn_ms=7500, crit_ms=15000)
+            generator.register_service(name, warn_ms=7500, crit_ms=15000)
         except ValueError:
             pass
-    generator.ingest_service(HEALTH_SERVICE, **fields)
+    generator.ingest_service(name, **fields)
 
 
 def _report_health(now, gap_ms, lost):
@@ -170,10 +415,15 @@ def _canon(line):
     return f"{stamp}  {src:<6}  {act:<7}  {detail}"
 
 
+_POST_OK = re.compile(r"\bsent \|.*\(HTTP 2\d\d(?:, (\d+) ms)?\)")
+
+
 def _add(line):
-    global _connected, _mode
+    global _connected, _mode, _added
+    _load_log()  # first, or the saved lines would load on top of ones added since
     raw, line = line, _canon(line)
     _log.append(line)
+    _added += 1
     try:
         path = _logfile()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +431,20 @@ def _add(line):
             f.write(line + "\n")
     except OSError:
         pass
+    if m := _POST_OK.search(raw):
+        _pipe["ok"] += 1
+        if m.group(1):
+            _pipe["ms"].append(int(m.group(1)))
+    elif re.search(r"\bFAIL\s*\|", raw):
+        _pipe["fail"] += 1
+    elif re.search(r"\bDRY\s*\|", raw):
+        _pipe["dry"] += 1
+    elif re.search(r"\bskip\s*\|", raw):
+        _pipe["skip"] += 1
+    if m := _AWAKE.search(raw):
+        _link["awake_ms"], _link["duty_pct"] = int(m.group(1)), float(m.group(2))
+    elif "LoRa send FAILED" in raw:
+        _link["tx_failed"] += 1
     if m := _CONNECTED.search(raw):
         _connected = m.group(1)
         _link["fresh"] = FRESH_PACKETS
@@ -189,12 +453,16 @@ def _add(line):
     elif m := _TX.search(raw):
         _mode = "tx"  # the board's own output tells us its role better than our last flash does
         _link["tx_seq"] = int(m.group(1))
+        _link["tx_sent"] += 1
     elif m := _RX.search(raw):
         _mode = "rx"
         seq = int(m.group(1))
         last, prev_at, now = _link.get("seq"), _link["at"], time.time()
-        lost = seq - last - 1 if last is not None and seq > last + 1 and not _link["fresh"] else 0
-        gap_ms = None if prev_at is None or _link["fresh"] else round((now - prev_at) * 1000)
+        fresh = bool(_link["fresh"])
+        lost = seq - last - 1 if last is not None and seq > last + 1 and not fresh else 0
+        gap_ms = None if prev_at is None or fresh else round((now - prev_at) * 1000)
+        _record_packet({"t": round(now, 1), "seq": seq, "rssi": int(m.group(2)), "snr": int(m.group(3)),
+                        "lost": lost, "fresh": fresh, "restart": last is not None and seq <= last})
         _link["lost"] += lost
         _link["fresh"] = max(0, _link["fresh"] - 1)
         _link.update(
@@ -213,9 +481,11 @@ def _reset_link():
     _connected = None
     _outcomes.clear()
     _arrivals.clear()
+    _pipe.clear()
+    _pipe.update(ok=0, fail=0, dry=0, skip=0, ms=collections.deque(maxlen=200))
     _link.clear()
     _link.update(received=0, lost=0, seq=None, rssi=None, snr=None, at=None, tx_seq=None,
-                 fresh=FRESH_PACKETS)
+                 tx_sent=0, tx_failed=0, awake_ms=None, duty_pct=None, fresh=FRESH_PACKETS)
 
 
 _reset_link()
@@ -230,14 +500,18 @@ def running():
     return _proc is not None and _proc.poll() is None
 
 
-def status():
-    global _mode
+def status(since=None):
+    """`since` is a log_total the caller already holds: only newer lines come back."""
     _load_log()
-    if _mode is None:
-        _mode = (state_store.load_receiver() or {}).get("mode")
+    _load_prefs()
     at = _link["at"]
     return {
         "running": running(),
+        "keep": _keep,
+        "alerts": dict(_alerts),
+        "buoy": settings.receiver_buoy,
+        "service": service_name(),
+        "token_required": bool(settings.receiver_token),
         "mode": _mode,
         "flashing": _flashing,
         "dry_run": _dry_run,
@@ -246,69 +520,215 @@ def status():
         "ports": ports(),
         "link": {**{k: v for k, v in _link.items() if k not in ("at", "fresh")},
                  "age_s": None if at is None else round(time.time() - at, 1)},
-        "log": list(_log)[-STATUS_LOG_LINES:],
+        "log": _log_since(since),
+        "log_total": _added,
+        "log_epoch": _epoch,
     }
 
 
+def _log_since(since):
+    lines = list(_log)
+    if since is None:
+        return lines[-STATUS_LOG_LINES:]
+    return lines[max(0, since - (_added - len(lines))):][-STATUS_LOG_LINES:]
+
+
 def clear_log():
+    """Empty the console and the log file, or the old lines would load back on the next run."""
+    global _epoch
+    _load_log()  # so a later status() does not reload the file we are about to empty
     _log.clear()
+    _epoch = time.time_ns()
+    try:
+        _logfile().write_text("", encoding="utf-8")
+        _logfile().with_suffix(".log.1").unlink(missing_ok=True)
+    except OSError:
+        pass
     return status()
 
 
+def _pidfile():
+    return Path(settings.state_db).parent / "bridge.pid"
+
+
+def reap_orphan():
+    """A bridge left running by a telem that was killed hard still holds the serial port."""
+    try:
+        pid = int(_pidfile().read_text())
+    except (OSError, ValueError):
+        return
+    try:
+        cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+    except OSError:
+        return
+    if "bridge.py" in cmd:  # not some unrelated process that inherited the pid
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            if subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode:
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(pid, signal.SIGKILL)
+        _note("stop", f"stopped a bridge left running by an earlier telem (pid {pid})")
+    _pidfile().unlink(missing_ok=True)
+
+
+def _spawn():
+    global _proc, _started_at
+    if running():
+        return
+    d = _dir()
+    reap_orphan()
+    _load_log()
+    try:
+        if _logfile().stat().st_size > LOG_ROTATE_BYTES:
+            _logfile().replace(_logfile().with_suffix(".log.1"))
+    except OSError:
+        pass
+    _reset_link()
+    _trim_packets()
+    cmd = [_python(d), "-u", str(d / "tools" / "bridge.py"), "--base-url", _base_url,
+           "--buoy-id", settings.receiver_buoy]
+    if _dry_run:
+        cmd.append("--dry-run")
+    if _port:
+        cmd += ["--port", _port]
+    _note("start", f"bridge -> {_base_url}" + ("  [DRY RUN]" if _dry_run else ""))
+    _proc = subprocess.Popen(cmd, cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    _started_at = time.time()
+    try:
+        _pidfile().parent.mkdir(parents=True, exist_ok=True)
+        _pidfile().write_text(str(_proc.pid))
+    except OSError:
+        pass
+    threading.Thread(target=_pump, args=(_proc,), daemon=True).start()
+
+
+def _terminate():
+    global _proc
+    if running():
+        _proc.terminate()
+        try:
+            _proc.wait(10)
+        except subprocess.TimeoutExpired:
+            _proc.kill()
+            _proc.wait()
+        _note("stop", "bridge")
+    _proc = None
+    _pidfile().unlink(missing_ok=True)
+    _reset_link()
+
+
 def start(base_url=None, dry_run=None, port=None):
-    """dry_run/port of None keep the previous choice; port "" means auto-detect."""
-    global _proc, _base_url, _dry_run, _port
+    """dry_run/port of None keep the previous choice; port "" means auto-detect.
+    Starting also means "keep it running": telem restarts the bridge if it dies."""
+    global _base_url, _dry_run, _port, _keep
     with _lock:
+        _load_prefs()
         if running():
             return status()
-        d = _dir()
         if port and port not in ports():
             raise ValueError(f"Serial port {port} is not present")
-        _base_url = (base_url or _base_url).rstrip("/")
+        if base_url:
+            _base_url = base_url.rstrip("/")
         if dry_run is not None:
             _dry_run = dry_run
         if port is not None:
             _port = port or None
-        _load_log()
-        try:
-            if _logfile().stat().st_size > LOG_ROTATE_BYTES:
-                _logfile().replace(_logfile().with_suffix(".log.1"))
-        except OSError:
-            pass
-        _reset_link()
-        cmd = [_python(d), "-u", str(d / "tools" / "bridge.py"), "--base-url", _base_url]
-        if _dry_run:
-            cmd.append("--dry-run")
-        if _port:
-            cmd += ["--port", _port]
-        _note("start", f"bridge -> {_base_url}" + ("  [DRY RUN]" if _dry_run else ""))
-        _proc = subprocess.Popen(
-            cmd, cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
-        threading.Thread(target=_pump, args=(_proc,), daemon=True).start()
+        _spawn()
+        _keep = True
+        _save_prefs()
         return status()
 
 
 def stop():
-    global _proc
+    """The operator stopped it: stay stopped, including across telem restarts."""
+    global _keep
     with _lock:
-        if running():
-            _proc.terminate()
-            try:
-                _proc.wait(10)
-            except subprocess.TimeoutExpired:
-                _proc.kill()
-                _proc.wait()
-            _note("stop", "bridge")
-        _proc = None
-        _reset_link()
+        _load_prefs()
+        _keep = False
+        _save_prefs()
+        _terminate()
         return status()
 
 
 def restart(base_url=None, dry_run=None, port=None):
     with _lock:
-        stop()
+        _terminate()
         return start(base_url, dry_run, port)
+
+
+def shutdown():
+    """Telem is exiting: stop the bridge but leave the "keep running" choice for the next launch."""
+    _stop_watch.set()
+    with _lock:
+        _terminate()
+
+
+def _watch_bridge(now):
+    """Restart a bridge that exited by itself, backing off while it keeps dying."""
+    global _backoff, _next_restart
+    with _lock:
+        if not _keep or _flashing:
+            return
+        if running():
+            if now - _started_at > 60:
+                _backoff = 0
+            return
+        if now < _next_restart:
+            return
+        _backoff = min(60, max(3, _backoff * 2))
+        _next_restart = now + _backoff
+        _note("restart", "bridge exited unexpectedly, restarting")
+        try:
+            _spawn()
+        except ValueError as exc:
+            _note("fail", str(exc))
+
+
+def tick(now=None):
+    from . import receiver_alerts
+
+    now = time.time() if now is None else now
+    _watch_bridge(now)
+    receiver_alerts.evaluate(now)
+
+
+def _watch():
+    while not _stop_watch.wait(WATCH_SECONDS):
+        try:
+            tick()
+        except Exception as exc:  # the watcher must outlive any one bad tick
+            print(f"[receiver] watchdog: {exc}")
+
+
+def start_background():
+    """At telem startup: clear any orphaned bridge, relaunch it if it was left on, then watch it."""
+    global _watchdog
+    with _lock:
+        _load_prefs()
+        reap_orphan()
+        if _keep and not running():
+            try:
+                _spawn()
+            except ValueError as exc:
+                _note("fail", str(exc))
+        if _watchdog is None or not _watchdog.is_alive():
+            _stop_watch.clear()
+            _watchdog = threading.Thread(target=_watch, name="receiver-watchdog", daemon=True)
+            _watchdog.start()
+
+
+def link_state(now):
+    """What the alert evaluator needs to know about the radio link."""
+    recent = [r for r in list(_packets)[-5:] if not r["fresh"]]
+    return {
+        "watching": running() and _mode != "tx" and not _flashing,
+        "since_start_s": now - _started_at,
+        "age_s": None if _link["at"] is None else now - _link["at"],
+        "recent": recent,
+        "outcomes": list(_outcomes),
+    }
 
 
 def _flash(d, mode):
@@ -342,7 +762,7 @@ def set_mode(mode, base_url=None):
     with _lock:
         d = _dir()
         was_running = running()
-        stop()
+        _terminate()
         _flashing = mode
         _note("flash", f"flashing board as {mode.upper()}...")
         try:
@@ -351,12 +771,12 @@ def set_mode(mode, base_url=None):
             _flashing = None
         if ok:
             _mode = mode
-            state_store.save_receiver({"mode": mode})
+            _save_prefs()
             _note("flash", f"board flashed as {mode.upper()}")
         else:
             _note("flash", "FAILED")
         if was_running:
-            start(base_url)
+            _spawn()
         if not ok:
             raise ValueError(f"Flashing as {mode.upper()} failed: {tail}")
         return status()

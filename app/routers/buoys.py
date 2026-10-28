@@ -2,9 +2,11 @@ import time
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from pydantic import BaseModel, Field
 
-from .. import generator
+from .. import calibration, generator
+from ..security import control
 from ..influx_client import query_history, query_timeseries
 from ..models import (
     BuoyCreate,
@@ -180,3 +182,37 @@ def buoy_timeseries(
         aggregation,
         interval_seconds,
     )
+
+
+class Calibration(BaseModel):
+    offset: float = Field(0.0, allow_inf_nan=False)
+    scale: float = Field(1.0, allow_inf_nan=False)
+
+
+@router.get("/{buoy_id}/calibration", summary="Per-sensor offset and scale applied to new readings")
+def get_calibration(buoy_id: str):
+    if not generator.get_buoy_state(buoy_id):
+        raise HTTPException(404, "unknown buoy")
+    return calibration.get(buoy_id)
+
+
+@router.put(
+    "/{buoy_id}/calibration/{field}",
+    summary="Correct one sensor: stored value = reading * scale + offset (new readings only)",
+    dependencies=[Depends(control)],
+)
+def set_calibration(buoy_id: str, field: str, body: Calibration):
+    if not generator.get_buoy_state(buoy_id):
+        raise HTTPException(404, "unknown buoy")
+    return calibration.set_field(buoy_id, field, body.offset, body.scale)
+
+
+@router.delete(
+    "/{buoy_id}/calibration/{field}",
+    summary="Remove a sensor's correction",
+    dependencies=[Depends(control)],
+)
+def clear_calibration(buoy_id: str, field: str):
+    if not generator.get_buoy_state(buoy_id):
+        raise HTTPException(404, "unknown buoy")
+    return calibration.clear_field(buoy_id, field)

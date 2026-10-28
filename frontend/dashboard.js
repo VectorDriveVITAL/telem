@@ -2,7 +2,8 @@
 "use strict";
 import { animate as aAnimate } from "./anime.esm.js";
 import { animate as mAnimate } from "./motion.esm.js";
-import { describeLog } from "./receiver-log.js";
+import { CATEGORIES, createDescriber } from "./receiver-log.js";
+import { analyse, change, derived, smooth } from "./receiver-stats.js";
 // This build of motion.dev takes tween "duration" in seconds; every other
 // animation call in this file (anime.js, native Element.animate) is in
 // milliseconds, so this keeps every duration below written in ms.
@@ -83,13 +84,30 @@ let toastTimer,
   paletteIndex = 0,
   paletteResults = [];
 
-async function api(path, method = "GET", body, timeout = 25000) {
+async function api(path, method = "GET", body, timeout = 25000, retried = false) {
+  let token = null;
+  try {
+    token = localStorage.getItem("telem-receiver-token");
+  } catch {}
   const response = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(token && method !== "GET" ? { Authorization: "Bearer " + token } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeout),
   });
+  if (response.status === 401 && !retried) {
+    // The hardware and calibration controls can require RECEIVER_TOKEN; ask once, then remember it.
+    const entered = prompt("This control needs the access token (RECEIVER_TOKEN). Enter it:");
+    if (entered) {
+      try {
+        localStorage.setItem("telem-receiver-token", entered.trim());
+      } catch {}
+      return api(path, method, body, timeout, true);
+    }
+  }
   if (!response.ok) {
     let detail;
     try {
@@ -1828,11 +1846,15 @@ async function handleAction(button) {
     return;
   }
   if (a === "receiver-open") {
-    if (button.dataset.kind === "service") await selectSource("service", RX_SERVICE);
+    if (button.dataset.kind === "service") await selectSource("service", RX.service);
     else {
       S.metric = button.dataset.id;
-      await selectSource("sensor", RX_BUOY);
+      await selectSource("sensor", RX.buoy);
     }
+    return;
+  }
+  if (a === "cal-save" || a === "cal-reset" || a === "cal-match") {
+    await calibrationAction(a, button.dataset.id);
     return;
   }
   if (a === "receiver-clear") {
@@ -1841,7 +1863,7 @@ async function handleAction(button) {
   }
   if (a === "receiver-copy") {
     await navigator.clipboard.writeText(
-      [...$("receiver-log").children].map((row) => row.textContent).join("\n"),
+      [...$("receiver-log").children].filter((row) => !row.hidden).map((row) => row.textContent).join("\n"),
     );
     toast("Bridge output copied.");
     return;
@@ -2258,8 +2280,7 @@ async function loadVitalRemote() {
   }
 }
 let receiverTimer, receiverGraphTimer, receiverLast;
-const RX_BUOY = "buoy-01"; // the bridge's default buoy id
-const RX_SERVICE = "lora-receiver"; // registered by the server from the packets' arrival
+const RX = { buoy: "buoy-01", service: "lora-receiver" }; // replaced by the server's settings
 const RX_LABELS = {
   total_dissolved_solids: "TDS",
   conductivity: "Conductivity",
@@ -2278,7 +2299,7 @@ const RX_HEALTH = [
   ["rps", "Packet rate", (v) => [v.toFixed(2), "/s"]],
   ["error_rate", `Loss, last 20 packets`, (v) => [v.toFixed(0), "%"]],
 ];
-function rxTile(kind, key, label, value, unit, points) {
+function rxTile(kind, key, label, value, unit, points, smoothed = null) {
   const tile = document.createElement("button");
   tile.type = "button";
   tile.className = "rx-tile rx-" + kind;
@@ -2288,12 +2309,11 @@ function rxTile(kind, key, label, value, unit, points) {
   tile.title =
     kind === "service"
       ? "Open in Service health (packet interval appears there as latency, packet rate as rps, loss as error rate)"
-      : "Open in Sensor telemetry";
+      : "Open in Sensor telemetry" + (smoothed ? ". Bright line is smoothed, faint line is the raw readings." : "");
   const name = document.createElement("span"),
     val = document.createElement("span"),
     small = document.createElement("small"),
-    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
-    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   name.className = "rx-name";
   name.textContent = label;
   val.className = "rx-value";
@@ -2304,11 +2324,25 @@ function rxTile(kind, key, label, value, unit, points) {
   svg.setAttribute("viewBox", "0 0 260 32");
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
-  path.id = `rx-spark-${kind}-${key}`;
-  svg.append(path);
+  // The faint raw line goes first so the smoothed one draws over it.
+  for (const which of smoothed ? ["raw", "smooth"] : ["main"]) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.dataset.which = which;
+    if (which === "raw") path.setAttribute("class", "raw");
+    svg.append(path);
+  }
   tile.append(name, val, svg);
-  tile._points = points;
+  tile._series = { raw: points, smooth: smoothed };
   return tile;
+}
+function sparkD(points, lo, hi, t0, t1) {
+  return points
+    .filter((p) => Number.isFinite(p.value))
+    .map(
+      (p, i) =>
+        `${i ? "L" : "M"}${(((new Date(p.time) - t0) / Math.max(1, t1 - t0)) * 260).toFixed(2)},${(32 - ((p.value - lo) / Math.max(1e-9, hi - lo)) * 28).toFixed(2)}`,
+    )
+    .join(" ");
 }
 function rxFill(grid, tiles, empty) {
   grid.replaceChildren(...tiles);
@@ -2318,23 +2352,350 @@ function rxFill(grid, tiles, empty) {
     p.textContent = empty;
     grid.append(p);
   }
-  for (const t of tiles) drawSpark(t.querySelector("path").id, t._points);
+  for (const t of tiles) {
+    const { raw, smooth: sm } = t._series,
+      valid = raw.filter((p) => Number.isFinite(p.value));
+    if (!valid.length) continue;
+    // Both lines share one scale, or the smoothed line would be stretched to fill the box.
+    const vals = valid.map((p) => p.value),
+      lo = Math.min(...vals),
+      hi = Math.max(...vals),
+      t0 = +new Date(valid[0].time),
+      t1 = +new Date(valid.at(-1).time);
+    for (const path of t.querySelectorAll("path"))
+      path.setAttribute("d", sparkD(path.dataset.which === "smooth" ? sm : raw, lo, hi, t0, t1));
+  }
+}
+const fmtDuration = (sec) => {
+  const m = Math.round(sec / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+};
+function statCard(label, value, sub, level) {
+  const card = document.createElement("div"),
+    name = document.createElement("span"),
+    val = document.createElement("span"),
+    note = document.createElement("span");
+  card.className = "rx-stat";
+  name.className = "rx-name";
+  name.textContent = label;
+  val.className = "rx-value " + (level || "");
+  val.textContent = value;
+  note.className = "rx-sub";
+  note.textContent = sub || "";
+  card.append(name, val, note);
+  return card;
+}
+function histSvg(h) {
+  const ns = "http://www.w3.org/2000/svg",
+    svg = document.createElementNS(ns, "svg"),
+    n = h.counts.length;
+  svg.setAttribute("viewBox", "0 0 260 84");
+  svg.setAttribute("preserveAspectRatio", "none");
+  if (!n) return svg;
+  const max = Math.max(...h.counts),
+    w = 260 / n;
+  h.counts.forEach((c, i) => {
+    const rect = document.createElementNS(ns, "rect"),
+      height = (c / max) * 62,
+      title = document.createElementNS(ns, "title");
+    rect.setAttribute("x", (i * w + 1).toFixed(1));
+    rect.setAttribute("y", (66 - height).toFixed(1));
+    rect.setAttribute("width", Math.max(1, w - 2).toFixed(1));
+    rect.setAttribute("height", height.toFixed(1));
+    title.textContent = `${h.lo + i * h.width} to ${h.lo + (i + 1) * h.width}: ${c} packets`;
+    rect.append(title);
+    svg.append(rect);
+  });
+  for (const [x, text, anchor] of [[0, h.lo, "start"], [260, h.lo + n * h.width, "end"]]) {
+    const t = document.createElementNS(ns, "text");
+    t.setAttribute("x", x);
+    t.setAttribute("y", 80);
+    t.setAttribute("text-anchor", anchor);
+    t.textContent = text;
+    svg.append(t);
+  }
+  return svg;
+}
+const lvl = (v, warn, crit, lowIsBad = true) =>
+  lowIsBad ? (v < crit ? "crit" : v < warn ? "warn" : "") : v > crit ? "crit" : v > warn ? "warn" : "";
+function renderTimeline(buckets) {
+  const ns = "http://www.w3.org/2000/svg",
+    svg = document.createElementNS(ns, "svg"),
+    w = 260 / buckets.length,
+    max = Math.max(1, ...buckets.map((x) => x.lost));
+  svg.setAttribute("viewBox", "0 0 260 70");
+  svg.setAttribute("preserveAspectRatio", "none");
+  buckets.forEach((x, i) => {
+    // Red bars are lost packets; a faint stub marks a half hour with no packets at all.
+    const quiet = x.received === 0 && x.lost === 0,
+      h = quiet ? 4 : x.lost ? Math.max(3, (x.lost / max) * 58) : 1,
+      rect = document.createElementNS(ns, "rect"),
+      title = document.createElementNS(ns, "title"),
+      t = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    rect.setAttribute("x", (i * w + 0.5).toFixed(2));
+    rect.setAttribute("y", (62 - h).toFixed(1));
+    rect.setAttribute("width", Math.max(1, w - 1).toFixed(2));
+    rect.setAttribute("height", h.toFixed(1));
+    rect.setAttribute("class", quiet ? "quiet" : x.lost ? "lost" : "");
+    title.textContent = `${t(x.t * 1000)} to ${t((x.t + 1800) * 1000)}: ${quiet ? "no packets" : `${x.received} received, ${x.lost} lost`}`;
+    rect.append(title);
+    svg.append(rect);
+  });
+  for (const [x, ms, anchor] of [[0, buckets[0].t * 1000, "start"], [260, (buckets.at(-1).t + 1800) * 1000, "end"]]) {
+    const text = document.createElementNS(ns, "text");
+    text.setAttribute("x", x);
+    text.setAttribute("y", 69);
+    text.setAttribute("text-anchor", anchor);
+    text.textContent = new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    svg.append(text);
+  }
+  return svg;
+}
+function renderTxCards(r) {
+  const tx = r.mode === "tx",
+    l = r.link;
+  for (const id of ["rx-tx-label", "rx-tx-cards"]) $(id).hidden = !tx;
+  if (!tx) return;
+  $("rx-tx-cards").replaceChildren(
+    statCard("Packets sent", String(l.tx_sent), l.tx_seq === null ? "none yet" : `last was #${l.tx_seq}`),
+    statCard("Send failures", String(l.tx_failed), l.tx_failed ? "the radio reported a failed send" : "none", l.tx_failed ? "crit" : ""),
+    statCard("Awake per cycle", l.awake_ms === null ? "—" : l.awake_ms + " ms", l.duty_pct === null ? "" : `duty cycle ${l.duty_pct} % of the 5 s period`),
+  );
+}
+function renderLinkStats(st) {
+  RXSTATS = st;
+  const w1 = st.windows["1h"],
+    w24 = st.windows["24h"],
+    c = st.current,
+    cards = [];
+  const pdr = (w, label) =>
+    statCard(label, w.pdr === null ? "—" : w.pdr.toFixed(1) + " %", `${w.received} received, ${w.lost} lost`, w.pdr === null ? "" : lvl(w.pdr, 95, 80));
+  cards.push(pdr(w1, "Delivery, 1 h"), pdr(w24, "Delivery, 24 h"));
+  if (c) {
+    cards.push(
+      statCard("SNR margin", c.snr_margin_db.toFixed(1) + " dB", `SNR ${c.snr} dB vs ${st.constants.snr_floor_db} dB decode floor`, lvl(c.snr_margin_db, 6, 3)),
+      statCard("RSSI margin", c.rssi_margin_db + " dB", `${c.rssi} dBm vs ${st.constants.sensitivity_dbm} dBm sensitivity`, lvl(c.rssi_margin_db, 10, 5)),
+    );
+  }
+  cards.push(
+    statCard("Interval jitter, 1 h", w1.interval_s ? "± " + w1.interval_s.jitter + " s" : "—", w1.interval_s ? `mean ${w1.interval_s.mean} s, max ${w1.interval_s.max} s` : "needs a few packets"),
+    statCard("Buoy restarts, 24 h", String(w24.restarts), w24.restarts ? "sequence numbers went back" : "none seen"),
+  );
+  if (c) {
+    cards.push(
+      statCard("Buoy up, about", fmtDuration(c.buoy_uptime_s_estimate), "packet number × 5 s"),
+      statCard("Range, about", c.range_m_estimate >= 1000 ? (c.range_m_estimate / 1000).toFixed(1) + " km" : Math.round(c.range_m_estimate) + " m", "free-space estimate from path loss"),
+    );
+  }
+  $("rx-link-cards").replaceChildren(...cards);
+  $("rx-hist-rssi").replaceChildren(histSvg(st.rssi_hist));
+  $("rx-hist-snr").replaceChildren(histSvg(st.snr_hist));
+  $("rx-timeline").replaceChildren(renderTimeline(st.timeline));
+  const ev = w24.events
+    .slice()
+    .reverse()
+    .map((e) => {
+      const li = document.createElement("li"),
+        t = new Date(e.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      li.className = e.restart ? "" : "bad";
+      li.textContent = e.restart
+        ? `${t}  buoy restarted`
+        : `${t}  ${e.lost} packet${e.lost > 1 ? "s" : ""} lost (#${e.from}${e.lost > 1 ? "–#" + e.to : ""})`;
+      return li;
+    });
+  if (!ev.length) {
+    const li = document.createElement("li");
+    li.textContent = "None in the last 24 hours.";
+    ev.push(li);
+  }
+  $("rx-events").replaceChildren(...ev);
+  const p = st.pipeline;
+  $("rx-pipe-cards").replaceChildren(
+    statCard(
+      "Posted to telem",
+      String(p.posted),
+      p.dry ? `${p.dry} more in dry run` : p.success_pct === null ? "no posts yet" : `${p.success_pct} % succeeded, ${p.failed} failed`,
+      p.failed ? "warn" : "",
+    ),
+    statCard("Post latency", p.post_ms ? p.post_ms.avg + " ms" : "—", p.post_ms ? `95th percentile ${p.post_ms.p95} ms over ${p.post_ms.n} posts` : "no timed posts yet"),
+    statCard("Waiting in spool", String(p.spool_backlog), p.spool_backlog ? "failed posts, retried automatically" : "nothing queued", p.spool_backlog ? "warn" : ""),
+    statCard(
+      "Packets reaching telem",
+      `${p.posted + p.dry} of ${p.received}`,
+      `${p.failed} failed · ${p.skipped} skipped · ${p.unaccounted} unaccounted`,
+      p.unaccounted ? "warn" : "",
+    ),
+  );
+}
+const RXWIN = { minutes: 60 };
+const RX_WINDOWS = { 60: ["the hour", "aggregation=raw", 5], 360: ["6 hours", "aggregation=mean&interval_seconds=60", 60], 1440: ["24 hours", "aggregation=mean&interval_seconds=300", 300] };
+let RXSTATS = null,
+  RXSERIES = {},
+  RXLIVE = [];
+function renderAnalytics(live, series, derivedSeries, periodS, label) {
+  const head = ["Sensor", "Now", `Over ${label}`, "Min · avg · max", "Spread (σ)", "Readings", "Flags"],
+    table = $("rx-analytics"),
+    rows = [];
+  for (const [key, , unit] of live) {
+    const a = analyse(series[key] || [], periodS);
+    if (!a) continue;
+    const ch = periodS === 5 ? a.change60 : change(series[key], RXWIN.minutes),
+      arrow = !ch || Math.abs(ch.delta) <= Math.max(a.std * 0.5, 1e-9) ? "▬" : ch.delta > 0 ? "▲" : "▼",
+      cells = [
+        RX_LABELS[key] || pretty(key),
+        `${number(a.last)} ${unit || ""}`,
+        ch ? `${arrow} ${ch.delta > 0 ? "+" : ""}${number(+ch.delta.toFixed(3))} in ${ch.spanMin >= 120 ? (ch.spanMin / 60).toFixed(1) + " h" : Math.round(ch.spanMin) + " min"}` : "—",
+        `${number(+a.min.toFixed(3))} · ${number(+a.avg.toFixed(3))} · ${number(+a.max.toFixed(3))}`,
+        number(+a.std.toFixed(3)),
+        a.availability === null ? "—" : a.availability.toFixed(0) + " %",
+      ];
+    const tr = document.createElement("tr");
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.append(td);
+    }
+    const flags = document.createElement("td");
+    for (const f of a.flags) {
+      const chip = document.createElement("span");
+      chip.className = "rx-flag";
+      chip.textContent = f.text;
+      flags.append(chip);
+    }
+    tr.append(flags);
+    rows.push(tr);
+  }
+  const thead = document.createElement("tr");
+  for (const h of head) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    thead.append(th);
+  }
+  table.replaceChildren(thead, ...rows);
+  $("rx-derived").replaceChildren(
+    ...derived(derivedSeries).map((d) => {
+      const card = statCard(d.label, `${d.value > 0 && d.unit.includes("/h") ? "+" : ""}${d.value.toFixed(1)} ${d.unit}`, d.note || d.hint || "", d.level === "ok" ? "" : d.level);
+      if (d.hint) card.title = d.hint;
+      return card;
+    }),
+  );
+}
+/* One row per real sensor. Inputs are only rebuilt when the set of sensors changes or after a
+   save, so a refresh every 10 s never wipes what someone is typing. */
+function renderCalibration(live, cal) {
+  const table = $("rx-calibration"),
+    keys = live.map((r) => r[0]).join(",");
+  for (const [key, value, unit] of live) {
+    const cell = table.querySelector(`[data-now="${key}"]`);
+    if (cell) cell.textContent = `${number(value)} ${unit || ""}`;
+  }
+  if (table.dataset.keys === keys && !table.dataset.stale) return;
+  table.dataset.keys = keys;
+  delete table.dataset.stale;
+  const head = document.createElement("tr");
+  for (const h of ["Sensor", "Stored now", "Offset", "Scale", "Match a reference", ""]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.append(th);
+  }
+  const input = (cls, value, step = "any") => {
+    const el = document.createElement("input");
+    el.type = "number";
+    el.step = step;
+    el.className = cls;
+    el.value = value;
+    return el;
+  };
+  const button = (text, action, key, cls = "action") => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.dataset.action = action;
+    b.dataset.id = key;
+    return b;
+  };
+  const rows = live.map(([key, value, unit]) => {
+    const c = cal[key] || { offset: 0, scale: 1 },
+      tr = document.createElement("tr"),
+      cells = Array.from({ length: 6 }, () => document.createElement("td"));
+    tr.dataset.key = key;
+    cells[0].textContent = RX_LABELS[key] || pretty(key);
+    cells[1].dataset.now = key;
+    cells[1].textContent = `${number(value)} ${unit || ""}`;
+    cells[2].append(input("cal-offset", c.offset));
+    cells[3].append(input("cal-scale", c.scale));
+    cells[4].append(input("cal-ref", ""), " ", button("Set offset", "cal-match", key));
+    cells[4].firstChild.placeholder = "true value";
+    cells[5].append(button("Save", "cal-save", key, "action primary"), " ", button("Reset", "cal-reset", key));
+    tr.append(...cells);
+    return tr;
+  });
+  table.replaceChildren(head, ...rows);
+}
+function calRow(key) {
+  return $("rx-calibration").querySelector(`tr[data-key="${key}"]`);
+}
+async function calibrationAction(action, key) {
+  const row = calRow(key),
+    err = $("rx-cal-error");
+  err.textContent = "";
+  const path = `/api/buoys/${RX.buoy}/calibration/${encodeURIComponent(key)}`;
+  try {
+    if (action === "cal-reset") await api(path, "DELETE");
+    else {
+      let offset = Number(row.querySelector(".cal-offset").value),
+        scale = Number(row.querySelector(".cal-scale").value);
+      if (action === "cal-match") {
+        const ref = row.querySelector(".cal-ref").value;
+        if (ref === "") throw new Error("Enter the true value first.");
+        // Average the latest minute so one noisy reading does not set the offset.
+        const recent = (RXSERIES[key] || []).filter((p) => Number.isFinite(p.value)).slice(-12).map((p) => p.value),
+          now = recent.length ? recent.reduce((a, b) => a + b, 0) / recent.length : null;
+        if (now === null) throw new Error("No recent readings to compare against.");
+        const raw = (now - offset) / scale; // undo the correction already being applied
+        offset = Number(ref) - raw * scale;
+      }
+      if (!Number.isFinite(offset) || !Number.isFinite(scale) || scale === 0)
+        throw new Error("Offset and scale must be numbers, and scale cannot be 0.");
+      await api(path, "PUT", { offset, scale });
+      toast(`${RX_LABELS[key] || pretty(key)} calibration saved for new readings.`);
+    }
+    $("rx-calibration").dataset.stale = "1";
+    await loadReceiverGraphs();
+  } catch (e) {
+    err.textContent = e.message;
+  }
 }
 async function loadReceiverGraphs() {
-  const b = getBuoy(RX_BUOY),
-    svc = getService(RX_SERVICE),
+  const b = getBuoy(RX.buoy),
+    svc = getService(RX.service),
     live = (b ? Object.entries(b.sensors) : [])
       .filter(([, x]) => !x.simulated)
       .map(([k, x]) => [k, x.value, x.unit]);
   if (b && b.field_metadata.signal_dbm && !b.field_metadata.signal_dbm.simulated)
     live.push(["signal_dbm", b.signal_dbm, "dBm"]);
-  const history = (path, metrics) =>
-    api(`${path}/timeseries?metrics=${metrics.join(",")}&minutes=30&aggregation=mean&interval_seconds=30`);
-  const [bh, sh] = await Promise.all([
-    live.length ? history(`/api/buoys/${RX_BUOY}`, live.map((r) => r[0])) : null,
-    svc ? history(`/api/services/${RX_SERVICE}`, RX_HEALTH.map((h) => h[0])) : null,
+  const [label, agg, periodS] = RX_WINDOWS[RXWIN.minutes],
+    keys = live.map((r) => r[0]).join(","),
+    buoyHistory = (minutes, aggregation) =>
+      api(`/api/buoys/${RX.buoy}/timeseries?metrics=${keys}&minutes=${minutes}&${aggregation}`);
+  const [hour, long, p3, sh, stats, cal] = await Promise.all([
+    // Raw points, so a flat or stuck reading is not smoothed away.
+    live.length ? buoyHistory(60, "aggregation=raw") : null,
+    live.length && RXWIN.minutes !== 60 ? buoyHistory(RXWIN.minutes, agg) : null,
+    live.some((r) => r[0] === "pressure")
+      ? api(`/api/buoys/${RX.buoy}/timeseries?metrics=pressure&minutes=180&aggregation=mean&interval_seconds=60`)
+      : null,
+    svc
+      ? api(`/api/services/${RX.service}/timeseries?metrics=${RX_HEALTH.map((h) => h[0]).join(",")}&minutes=60&aggregation=mean&interval_seconds=30`)
+      : null,
+    api("/api/receiver/stats"),
+    b ? api(`/api/buoys/${RX.buoy}/calibration`).catch(() => ({})) : {},
   ]);
   const series = (h, key) => (h ? h.points.map((p) => ({ time: p.time, value: p.values[key] })) : []);
+  const hourSeries = Object.fromEntries(live.map(([k]) => [k, series(hour, k)]));
+  RXLIVE = live;
+  RXSERIES = hourSeries;
   rxFill(
     $("rx-health"),
     svc
@@ -2347,22 +2708,78 @@ async function loadReceiverGraphs() {
   );
   rxFill(
     $("rx-sensors"),
-    live.map(([key, value, unit]) =>
-      rxTile("sensor", key, RX_LABELS[key] || pretty(key), number(value), unit, series(bh, key)),
-    ),
+    live.map(([key, value, unit]) => {
+      const pts = hourSeries[key];
+      return rxTile("sensor", key, RX_LABELS[key] || pretty(key), number(value), unit, pts, pts.length >= 20 ? smooth(pts) : null);
+    }),
     "No real sensor readings yet. Start the bridge (not dry run) once packets are arriving.",
   );
+  renderLinkStats(stats);
+  const windowed = long ? Object.fromEntries(live.map(([k]) => [k, series(long, k)])) : hourSeries;
+  renderAnalytics(live, windowed, { ...hourSeries, pressure_3h: series(p3, "pressure") }, periodS, label);
+  renderCalibration(live, cal);
 }
 function receiverBusy(r) {
   document
-    .querySelectorAll("#view-receiver [data-action^='receiver-'], #receiver-port, #receiver-dry")
+    .querySelectorAll("#view-receiver [data-action^='receiver-'], #receiver-port, #receiver-dry, #receiver-alerts input")
     .forEach((el) => (el.disabled = !!r.flashing));
 }
-function renderReceiverLog(r) {
-  const log = $("receiver-log");
-  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
-  const frag = document.createDocumentFragment();
-  for (const row of describeLog(r.log, $("log-chatter").checked)) {
+const RX_CAT_LABELS = { packets: "Packets", posts: "Posts", issues: "Issues", system: "System", board: "Board log" };
+const RX_LOG_MAX_ROWS = 1500;
+const RXLOG = { epoch: null, total: 0, describer: null, session: 0, unseen: 0, filters: {} };
+function loadLogFilters() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem("telem-log-filters") || "{}");
+  } catch {}
+  RXLOG.filters = Object.fromEntries(CATEGORIES.map((c) => [c, saved[c] !== false]));
+}
+function logRowHidden(el) {
+  const q = $("log-search").value.trim().toLowerCase();
+  return (
+    !RXLOG.filters[el.dataset.cat] ||
+    ($("log-session").checked && +el.dataset.sess !== RXLOG.session) ||
+    (q !== "" && !el.dataset.q.includes(q))
+  );
+}
+function applyLogFilters() {
+  const log = $("receiver-log"),
+    atEnd = logAtEnd(log);
+  for (const el of log.children) el.hidden = logRowHidden(el);
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+function renderLogChips() {
+  $("log-chips").replaceChildren(
+    ...CATEGORIES.map((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset.cat = c;
+      b.textContent = RX_CAT_LABELS[c];
+      b.setAttribute("aria-pressed", RXLOG.filters[c]);
+      return b;
+    }),
+  );
+}
+const logAtEnd = (log) => log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+function updateLogJump() {
+  const btn = $("log-jump"),
+    away = !logAtEnd($("receiver-log"));
+  btn.hidden = !away;
+  btn.textContent = RXLOG.unseen ? `↓ ${RXLOG.unseen} new` : "↓ Latest";
+}
+function resetReceiverLog(epoch) {
+  RXLOG.epoch = epoch;
+  RXLOG.total = 0;
+  RXLOG.session = 0;
+  RXLOG.unseen = 0;
+  RXLOG.describer = createDescriber();
+  $("receiver-log").replaceChildren();
+}
+function appendLogRows(rows) {
+  const log = $("receiver-log"),
+    frag = document.createDocumentFragment();
+  for (const row of rows) {
+    if (row.session) RXLOG.session += 1; // the divider belongs to the session it opens
     const line = document.createElement("span");
     line.className = "l-" + row.cls;
     for (const p of row.parts) {
@@ -2376,20 +2793,44 @@ function renderReceiverLog(r) {
       if (p.title) tok.title = p.title;
       line.append(tok);
     }
+    line.dataset.cat = row.cat;
+    line.dataset.sess = RXLOG.session;
+    if (row.packet) Object.assign(line.dataset, { seq: row.packet.seq, time: row.packet.time });
+    if (row.json) line._json = row.json;
+    line.dataset.q = line.textContent.toLowerCase();
+    line.hidden = logRowHidden(line);
     frag.append(line);
   }
-  log.replaceChildren(frag);
-  if (!r.log.length) log.textContent = "No bridge output yet.";
+  log.append(frag);
+  while (log.children.length > RX_LOG_MAX_ROWS) log.firstChild.remove();
+}
+/* `r.log` is the tail of the server's log ending at `r.log_total`, so only lines past what we
+   already show are new. That holds for a polled increment and for a full status alike. */
+function syncReceiverLog(r) {
+  if (r.log_epoch !== RXLOG.epoch) resetReceiverLog(r.log_epoch);
+  if ($("log-pause").checked) return;
+  const lines = r.log.slice(Math.max(0, RXLOG.total - (r.log_total - r.log.length)));
+  RXLOG.total = r.log_total;
+  if (!lines.length) return;
+  const log = $("receiver-log"),
+    atEnd = logAtEnd(log);
+  appendLogRows(lines.flatMap((l) => RXLOG.describer.push(l)));
   if (atEnd) log.scrollTop = log.scrollHeight;
+  else RXLOG.unseen += lines.length;
+  updateLogJump();
 }
 function renderReceiver(r) {
   receiverLast = r;
+  RX.buoy = r.buoy;
+  RX.service = r.service;
   setText(
     "receiver-state",
     r.flashing
       ? `Flashing as ${r.flashing.toUpperCase()}… (about 20 s, do not unplug the board)`
       : [
-          r.running ? "Bridge running" + (r.dry_run ? " (dry run)" : "") : "Bridge stopped",
+          r.running
+            ? "Bridge running" + (r.dry_run ? " (dry run)" : "") + (r.keep ? ", restarts itself if it stops" : "")
+            : "Bridge stopped",
           r.mode ? "board is " + r.mode.toUpperCase() : "board role unknown",
         ].join(" · "),
   );
@@ -2401,7 +2842,11 @@ function renderReceiver(r) {
   const parts = [
     r.running ? (r.connected_port ? "port " + r.connected_port : "no board found") : "",
     ...(r.mode === "tx"
-      ? [l.tx_seq === null ? "transmitting" : `transmitting, last packet #${l.tx_seq}`]
+      ? [
+          l.tx_seq === null ? "transmitting" : `transmitting, last packet #${l.tx_seq}`,
+          `sent ${l.tx_sent}${l.tx_failed ? ` · ${l.tx_failed} failed` : ""}`,
+          l.duty_pct === null ? "" : `awake ${l.awake_ms} ms (duty ${l.duty_pct} %)`,
+        ]
       : [
           l.age_s === null ? "no packet yet" : `last packet ${Math.round(l.age_s)} s ago`,
           l.rssi === null ? "" : `RSSI ${l.rssi} dBm · SNR ${l.snr} dB`,
@@ -2427,11 +2872,14 @@ function renderReceiver(r) {
     );
   }
   $("receiver-dry").checked = r.dry_run;
+  for (const box of document.querySelectorAll("#receiver-alerts [data-alert]"))
+    if (document.activeElement !== box) box.checked = r.alerts[box.dataset.alert];
+  renderTxCards(r);
   receiverBusy(r);
-  if (!$("log-pause").checked) renderReceiverLog(r);
+  syncReceiverLog(r);
 }
 async function loadReceiver() {
-  renderReceiver(await api("/api/receiver"));
+  renderReceiver(await api("/api/receiver?since=" + RXLOG.total));
 }
 function receiverOptions() {
   return { dry_run: $("receiver-dry").checked, port: $("receiver-port").value };
@@ -2443,13 +2891,120 @@ async function receiverApply() {
 }
 $("receiver-dry").addEventListener("change", () => receiverApply().catch((e) => toast(e.message)));
 $("receiver-port").addEventListener("change", () => receiverApply().catch((e) => toast(e.message)));
-$("log-chatter").checked = localStorage.getItem("telem-log-chatter") !== "0";
-$("log-chatter").addEventListener("change", () => {
-  localStorage.setItem("telem-log-chatter", $("log-chatter").checked ? "1" : "0");
-  if (receiverLast) renderReceiverLog(receiverLast);
+loadLogFilters();
+renderLogChips();
+$("log-chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-cat]");
+  if (!b) return;
+  RXLOG.filters[b.dataset.cat] = !RXLOG.filters[b.dataset.cat];
+  b.setAttribute("aria-pressed", RXLOG.filters[b.dataset.cat]);
+  try {
+    localStorage.setItem("telem-log-filters", JSON.stringify(RXLOG.filters));
+  } catch {}
+  applyLogFilters();
 });
+$("log-search").addEventListener("input", applyLogFilters);
+$("rx-window").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-minutes]");
+  if (!b) return;
+  RXWIN.minutes = Number(b.dataset.minutes);
+  for (const x of $("rx-window").children) x.classList.toggle("active", x === b);
+  loadReceiverGraphs().catch((err) => toast(err.message));
+});
+$("receiver-alerts").addEventListener("change", async (e) => {
+  const box = e.target.closest("[data-alert]");
+  if (!box) return;
+  try {
+    renderReceiver(await api("/api/receiver/alerts", "PUT", { [box.dataset.alert]: box.checked }));
+  } catch (err) {
+    box.checked = !box.checked;
+    toast(err.message);
+  }
+});
+/* Click a dry-run row to expand its JSON, or a received packet to see what we know about it. */
+$("receiver-log").addEventListener("click", (e) => {
+  const row = e.target.closest("#receiver-log > span");
+  if (!row || window.getSelection()?.toString()) return;
+  if (row._json) {
+    const open = row.querySelector(".rx-json");
+    if (open) open.remove();
+    else {
+      const pre = document.createElement("span");
+      pre.className = "rx-json";
+      pre.textContent = JSON.stringify(row._json, null, 1);
+      row.append(pre);
+    }
+    row.querySelector(".t-toggle").textContent = open ? "  ▸ show" : "  ▾ hide";
+  } else if (row.dataset.seq) showPacket(+row.dataset.seq, row.dataset.time).catch((err) => toast(err.message));
+});
+async function showPacket(seq, time) {
+  const box = $("rx-packet"),
+    secs = (t) => t.split(":").reduce((a, v) => a * 60 + +v, 0),
+    local = (t) => {
+      const d = new Date(t * 1000);
+      return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+    };
+  // The log shows a time of day, the store keeps full times: pick the record closest to the row.
+  const found = (await api(`/api/receiver/packets?seq=${seq}`))
+    .map((p) => ({ p, d: Math.abs(local(p.t) - secs(time)) }))
+    .sort((a, b) => a.d - b.d)[0];
+  box.hidden = false;
+  box.replaceChildren();
+  const title = document.createElement("h4"),
+    close = document.createElement("button"),
+    list = document.createElement("dl");
+  title.textContent = `Packet #${seq} at ${time}`;
+  close.type = "button";
+  close.className = "action";
+  close.textContent = "Close";
+  close.style.float = "right";
+  close.onclick = () => (box.hidden = true);
+  const add = (k, v) => {
+    const dt = document.createElement("dt"),
+      dd = document.createElement("dd");
+    dt.textContent = k;
+    dd.textContent = v;
+    list.append(dt, dd);
+  };
+  if (!found || found.d > 5) add("Stored record", "not found (older than 24 h, or from before packets were stored)");
+  else {
+    const p = found.p,
+      k = RXSTATS?.constants;
+    add("Signal strength", `${p.rssi} dBm` + (k ? ` (${p.rssi - k.sensitivity_dbm} dB above sensitivity)` : ""));
+    add("Signal quality", `${p.snr} dB` + (k ? ` (${(p.snr - k.snr_floor_db).toFixed(1)} dB above the floor)` : ""));
+    add("Lost just before", p.fresh ? "not counted (connecting)" : String(p.lost));
+    add("Buoy restarted", p.restart ? "yes, numbering went back" : "no");
+    // What the dashboard stored from this packet: a few seconds either side of it.
+    const at = new Date(p.t * 1000);
+    try {
+      const keys = RXLIVE.map((r) => r[0]).join(",");
+      const h = keys
+        ? await api(`/api/buoys/${RX.buoy}/timeseries?metrics=${keys}&aggregation=raw&start=${new Date(at - 4000).toISOString()}&end=${new Date(+at + 4000).toISOString()}`)
+        : { points: [] };
+      const pt = h.points.at(-1);
+      if (!pt) add("Readings", "none stored for this packet (dry run, or not posted)");
+      else
+        for (const [name, v] of Object.entries(pt.values))
+          if (v !== null) add(RX_LABELS[name] || pretty(name), number(v));
+    } catch {
+      add("Readings", "could not be loaded");
+    }
+  }
+  box.append(close, title, list);
+}
+$("log-session").addEventListener("change", applyLogFilters);
 $("log-pause").addEventListener("change", () => {
-  if (!$("log-pause").checked && receiverLast) renderReceiverLog(receiverLast);
+  if (!$("log-pause").checked) loadReceiver().catch(() => {});
+});
+$("receiver-log").addEventListener("scroll", () => {
+  if (logAtEnd($("receiver-log"))) RXLOG.unseen = 0;
+  updateLogJump();
+});
+$("log-jump").addEventListener("click", () => {
+  const log = $("receiver-log");
+  log.scrollTop = log.scrollHeight;
+  RXLOG.unseen = 0;
+  updateLogJump();
 });
 $("vital-form").addEventListener("submit", async (e) => {
   e.preventDefault();

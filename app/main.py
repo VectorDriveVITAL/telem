@@ -29,8 +29,9 @@ async def lifespan(app: FastAPI):
     print("[startup] fleet ready")
     _bg_task = asyncio.create_task(background_loop())
     vital.start()
+    receiver.start_background()
     yield
-    receiver.stop()  # the bridge would otherwise outlive us holding the serial port
+    receiver.shutdown()  # the bridge would otherwise outlive us holding the serial port
     if _bg_task:
         _bg_task.cancel()
         try:

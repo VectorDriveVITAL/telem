@@ -16,7 +16,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from . import state_store, vital
+from . import calibration, state_store, vital
 from .config import settings
 from .influx_client import make_point, utcnow, write_points
 from .models import SensorRules
@@ -210,6 +210,30 @@ def _sensor_health(sensor):
     return "healthy", False
 
 
+_RANK = {"healthy": 0, "warning": 1, "critical": 2}
+
+
+def _with_external(status, reasons, state):
+    """Fold in conditions another part of telem reports through set_conditions()."""
+    for severity, reason in state.get("external", []):
+        reasons.append(reason)
+        if _RANK[severity] > _RANK[status]:
+            status = severity
+    return status, reasons
+
+
+@mutation
+def set_conditions(kind, source, conditions):
+    """Replace the extra (severity, reason) conditions for one source. They raise and clear
+    alerts and incidents exactly like a threshold breach would."""
+    state = _source(kind, source)
+    new = [[sev, reason] for sev, reason in conditions]
+    if state.get("external", []) == new:
+        return
+    state["external"] = new
+    _evaluate()
+
+
 def _buoy_health(state):
     reasons, status = [], "healthy"
     if time.time() - state["last_contact"] > state["offline_after_seconds"]:
@@ -227,12 +251,12 @@ def _buoy_health(state):
             )
             if status != "critical":
                 status = severity
-    return status, reasons
+    return _with_external(status, reasons, state)
 
 
 def _service_health(state):
     if _age(state.get("last_reading_at")) > 300:
-        return "warning", ["stale reading"]
+        return _with_external("warning", ["stale reading"], state)
     severity = (
         "critical"
         if state["latency"] >= state["crit_ms"]
@@ -240,7 +264,9 @@ def _service_health(state):
         if state["latency"] >= state["warn_ms"]
         else "healthy"
     )
-    return severity, ["latency threshold exceeded"] if severity != "healthy" else []
+    return _with_external(
+        severity, ["latency threshold exceeded"] if severity != "healthy" else [], state
+    )
 
 
 def _evaluate():
@@ -636,9 +662,10 @@ def ingest_service_batch(name, readings):
 @mutation
 def ingest_buoy(buoy_id, fields_in, time_str=None):
     b = _source("buoy", buoy_id)
-    fields = {
-        k: float(v) for k, v in fields_in.items() if v is not None and k != "time"
-    }
+    fields = calibration.apply(
+        buoy_id,
+        {k: float(v) for k, v in fields_in.items() if v is not None and k != "time"},
+    )
     unknown = set(fields) - KNOWN_BUOY_UNIVERSAL_FIELDS - set(b["sensors"])
     if len(b["sensors"]) + len(unknown) > 64:
         raise ValueError("maximum 64 sensors per buoy")

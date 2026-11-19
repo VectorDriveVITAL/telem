@@ -8,6 +8,7 @@ REST API means calibration, alerts, silent-buoy detection and VITAL forwarding a
 
     LORAWAN_MQTT_PASSWORD=... python3 pi/lorawan_adapter.py --devices /etc/telem/devices.json
     python3 pi/lorawan_adapter.py --print-sample 70b3d57ed0012345 temp=22.5 humidity=48.2
+    python3 pi/lorawan_adapter.py --print-sample 70b3d57ed0012345 temp=22.5 | python3 pi/lorawan_adapter.py --once
 
 Needs `pip install paho-mqtt` (the decoding and posting need nothing).
 """
@@ -199,12 +200,24 @@ def main():
     ap.add_argument("--spool", default="spool.ndjson")
     ap.add_argument("--print-sample", nargs="+", metavar=("DEVEUI", "FIELD=VALUE"),
                     help="print a sample uplink for mosquitto_pub and exit")
+    ap.add_argument("--once", action="store_true",
+                    help="read one uplink JSON from stdin, send it to telem and exit (no MQTT needed)")
     args = ap.parse_args()
 
     if args.print_sample:
         values = {k: float(v) for k, v in (kv.split("=") for kv in args.print_sample[1:])}
         print(json.dumps(sample_uplink(args.print_sample[0].lower(), **values)))
         return 0
+
+    if args.once:
+        devices = {k.lower(): v for k, v in json.loads(Path(args.devices).read_text()).items()}
+        try:
+            line = handle(sys.stdin.read(), devices, Sender(args.telem, args.spool))
+        except (ValueError, KeyError) as exc:
+            print(f"skipped: {exc}")
+            return 1
+        print(line or "ok")
+        return 1 if line.startswith(("unknown device", "ignored")) else 0
 
     import paho.mqtt.client as mqtt  # imported here so the rest works without it
 

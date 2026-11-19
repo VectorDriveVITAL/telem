@@ -1,0 +1,17 @@
+# /etc/systemd/system/lora-pkt-fwd.service  (paths assume user vitalpi and the build in ~/sx1302_hal)
+[Unit]
+Description=Semtech SX1302 packet forwarder (RAK2287 HAT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The forwarder calls ./reset_lgw.sh from its own directory, so the working directory matters. It runs as
+# root because it drives the reset GPIO and /dev/spidev0.0, as the foreground test did.
+WorkingDirectory=/home/vitalpi/sx1302_hal/packet_forwarder
+# stdbuf makes its output line-buffered; otherwise the journal shows nothing for a long time.
+ExecStart=/usr/bin/stdbuf -oL /home/vitalpi/sx1302_hal/packet_forwarder/lora_pkt_fwd -c global_conf.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

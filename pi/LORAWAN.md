@@ -96,7 +96,16 @@ sudo systemctl enable --now lorawan-adapter
 - Failed posts retry, then spool to `spool.ndjson` and replay every 30 s. A reading telem rejects (unknown buoy,
   bad value) is logged and dropped.
 
-Try the chain before any pack exists:
+Try the Pi side with no gateway, network server or broker at all. Register a buoy for the pack, map its DevEUI to
+it, and push one fake uplink through:
+
+```bash
+curl -s -X POST localhost:8000/api/buoys -H 'Content-Type: application/json' -d '{"id":"core-01","lat":29.7,"lng":-95.4,"sensors":["temp"]}'
+echo '{"70b3d57ed0012345": "core-01"}' > /tmp/devices.json
+python3 pi/lorawan_adapter.py --print-sample 70b3d57ed0012345 temp=22.5 battery=87 | python3 pi/lorawan_adapter.py --once --devices /tmp/devices.json
+```
+
+Or, with a broker in the path:
 
 ```bash
 python3 pi/lorawan_adapter.py --print-sample 70b3d57ed0012345 temp=22.5 humidity=48.2 battery=87 > /tmp/up.json

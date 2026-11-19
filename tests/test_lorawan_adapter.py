@@ -199,3 +199,22 @@ def test_a_decoded_uplink_is_accepted_by_telem_and_becomes_real_sensor_data(clie
     b = next(x for x in client.get("/api/buoys").json() if x["id"] == "buoy-02")
     assert b["sensors"]["temp"]["value"] == 22.5 and b["sensors"]["temp"]["simulated"] is False
     assert b["sensors"]["humidity"]["value"] == 48.2 and b["battery"] == 87.0 and b["signal_dbm"] == -80
+
+
+def test_once_mode_sends_one_uplink_from_stdin_and_reports_success_or_failure(telem, tmp_path, monkeypatch, capsys):
+    import io
+    import sys
+
+    devices = tmp_path / "devices.json"
+    devices.write_text(json.dumps({"70B3D57ED0012345": "buoy-02"}))  # upper case in the file is fine
+    uplink = json.dumps(a.sample_uplink("70b3d57ed0012345", temp=21.0, battery=80))
+    argv = ["x", "--once", "--devices", str(devices), "--telem", telem.url, "--spool", str(tmp_path / "s")]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(uplink))
+    assert a.main() == 0 and "buoy-02" in capsys.readouterr().out
+    path, body = telem.received[0]
+    assert path == "/api/ingest/buoys/buoy-02" and body["temp"] == 21.0 and body["signal_dbm"] == -80
+    monkeypatch.setattr(sys, "stdin", io.StringIO(uplink.replace("70b3d57ed0012345", "ffffffffffffffff")))
+    assert a.main() == 1  # an unmapped device is a failure a script can notice
+    monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
+    assert a.main() == 1

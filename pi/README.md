@@ -24,6 +24,9 @@ the token for telem's `.env` (`INFLUX_URL`, `INFLUX_TOKEN`, `INFLUX_ORG`, `INFLU
 
 ## 2. Mosquitto
 
+If you followed the original guide you have `/etc/mosquitto/conf.d/local.conf`. Remove it (keep a copy) before
+adding `vital.conf`: both declare `listener 1883` and the broker will refuse to start.
+
 ```bash
 sudo cp pi/mosquitto/vital.conf /etc/mosquitto/conf.d/vital.conf
 sudo cp pi/mosquitto/acl /etc/mosquitto/acl
@@ -68,6 +71,27 @@ curl -s localhost:8000/api/buoys | python3 -m json.tool | grep -A3 '"temp"'   # 
 
 Once it works: `sudo systemctl enable --now telegraf`.
 
+## 5. telem on the Pi
+
+InfluxDB must be running first (`curl -s localhost:8086/health` shows `"status":"pass"`), set up with org
+`telem`, bucket `telemetry` and a token.
+
+```bash
+sudo mkdir -p /opt/telem && sudo chown vitalpi: /opt/telem
+git clone https://github.com/VectorDriveVITAL/telem.git /opt/telem
+cd /opt/telem && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env && nano .env          # INFLUX_TOKEN, and INFLUX_URL/ORG/BUCKET if they differ
+sudo cp pi/telem.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl enable --now telem
+```
+
+- By default telem creates simulated demo buoys (including `buoy-01`), so a test reading to
+  `vital/buoy/buoy-01/readings` works straight away. For a real deployment set `SEED_DEMO=false` in `.env`
+  before the first start and register your buoys instead.
+- The ingest routes have no login, as everywhere in telem. The bridge, flash and calibration controls only
+  accept this computer (or `RECEIVER_TOKEN`). If the Pi is reachable by people you do not trust, firewall port 8000.
+- The dashboard is at `http://<pi-ip>:8000/`.
+
 ## If it does not work
 
 | Symptom | Likely cause |
@@ -75,7 +99,8 @@ Once it works: `sudo systemctl enable --now telegraf`.
 | Telegraf: `not authorized` / connection refused | wrong MQTT password, or the ACL file is not readable by `mosquitto` |
 | `mosquitto_pub` succeeds, nothing in Telegraf | the ACL does not let that user write the topic, or the topic is not under `vital/` |
 | Telegraf writes, telem shows nothing | read telem's console for `[ingest] telegraf metric 0 rejected: ...`; usually the buoy is not registered |
-| Readings arrive with the wrong time | the payload `time` is not ISO 8601 with a zone; Telegraf then uses arrival time |
+| Readings arrive with the wrong time | the payload `time` is not ISO 8601 with a zone (telem logs it as rejected) |
+| Telegraf: `'json_time_key' could not be found` | an old config: remove `json_time_key`/`json_time_format`, use `json_string_fields = ["time"]` |
 | Changed `topics` but old ones are still used | `persistent_session` keeps the first subscription: change `client_id` once |
 | Telegraf starts but ignores `/etc/default/telegraf` | `sudo systemctl cat telegraf` should show an `EnvironmentFile=` line for it |
 

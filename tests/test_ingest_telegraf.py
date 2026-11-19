@@ -99,3 +99,17 @@ def test_storage_failure_is_not_swallowed_so_telegraf_retries(client, monkeypatc
 
     monkeypatch.setattr(fleet, "write_points", down)
     assert client.post("/api/ingest/telegraf", json=metric(ts=None, temp=1.0)).status_code == 503
+
+
+def test_a_time_in_the_payload_wins_and_a_missing_one_falls_back_to_telegrafs(client):
+    import time
+
+    now = int(time.time() * 1000)
+    r = client.post("/api/ingest/telegraf", json=[
+        metric(ts=now, temp=20.0, time="2026-11-19T15:25:40.5+00:00"),  # string fields come through as text
+        metric(ts=now, temp=21.0),  # {"temp": 21.0} alone, as a hand-typed test message
+        metric(ts=now, temp=22.0, time="yesterday"),
+    ])
+    assert r.json()["accepted"] == 2 and r.json()["rejected"][0]["index"] == 2
+    last = next(b for b in client.get("/api/buoys").json() if b["id"] == "test-buoy")["sensors"]["temp"]
+    assert last["value"] == 21.0  # the reading with no time counts as "now"

@@ -20,8 +20,8 @@ Keys are telem's sensor names; values are plain numbers.
  "pressure": 1010.4, "ph": 7.5, "turbidity": 0.0, "signal_dbm": -18}
 ```
 
-- **`time`** is optional ISO 8601 with a zone. Without it the broker-side arrival time is used, so
-  include it whenever the gateway can buffer readings (a reading sent late keeps its real time).
+- **`time`** is optional ISO 8601 with a zone. Without it the time Telegraf received the message is used,
+  so include it whenever the gateway can buffer readings (a reading sent late keeps its real time).
   Times more than 5 minutes in the future are refused.
 - **Missing key = not measured.** Never send `0` or `null` for a sensor that is off.
 - **Numbers only.** Strings and booleans are ignored. Nested objects are flattened with `_`.

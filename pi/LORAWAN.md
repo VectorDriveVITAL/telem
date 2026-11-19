@@ -19,9 +19,9 @@ Star topology: every pack talks only to the one gateway; each pack is its own so
 | Class / uplinks | Class A, unconfirmed, fPort 1 | the packs only report; nothing is sent back |
 | Interval | pick per need (60 s is fine on ChirpStack) | on The Things Stack's public service a fair-use airtime limit applies per device, so use 5 min or more |
 | Time | no clock on the pack | the network server stamps arrival; buffered readings carry `age_s` |
-| Network server | **undecided**, see below | |
+| Network server | The Things Stack (cloud), if the site really has internet | the Pi 3B+ is too tight for ChirpStack next to InfluxDB and telem; ChirpStack stays the fallback |
 
-**Network server.** ChirpStack on the Pi runs offline and keeps data local, but it needs PostgreSQL and
+**Network server.** Decided: The Things Stack in the cloud, on the strength of "we have internet" (not yet confirmed at the site). The adapter connects out to its MQTT broker, so the Pi carries no network-server load. If connectivity proves unreliable, switch to ChirpStack on the Pi: only the adapter's `--broker`, `--topic` and credentials change. The reasoning: ChirpStack on the Pi runs offline and keeps data local, but it needs PostgreSQL and
 Redis next to InfluxDB and telem, which is heavy for a 1 GB Pi 3B+ (not measured). A Pi 4 with 2-4 GB suits
 it. The Things Stack in the cloud costs the Pi almost nothing, but the site needs reliable internet and the
 adapter connects out to its broker over TLS. Changing later only changes the adapter's `--topic`, `--broker`

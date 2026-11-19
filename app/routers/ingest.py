@@ -162,7 +162,11 @@ def _ingest_telegraf_metric(metric):
         for k, v in (metric.get("fields") or {}).items()
         if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
     }
-    when = None if metric.get("timestamp") is None else _epoch_to_iso(metric["timestamp"])
+    raw = (metric.get("fields") or {}).get("time")
+    if isinstance(raw, str):  # the device's own time, passed through by json_string_fields
+        when = raw
+    else:  # otherwise when Telegraf received the message
+        when = None if metric.get("timestamp") is None else _epoch_to_iso(metric["timestamp"])
     if kind == "service":
         fields = {k: v for k, v in fields.items() if k in _SERVICE_FIELDS}
     if not fields:

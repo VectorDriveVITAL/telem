@@ -1,0 +1,16 @@
+# /etc/systemd/system/telem.service   (assumes telem is checked out in /opt/telem, owned by vitalpi)
+[Unit]
+Description=telem dashboard and API
+After=network-online.target influxdb.service
+Wants=network-online.target
+
+[Service]
+User=vitalpi
+WorkingDirectory=/opt/telem
+# One worker only: operational state lives in a single SQLite file. Settings come from /opt/telem/.env.
+ExecStart=/opt/telem/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

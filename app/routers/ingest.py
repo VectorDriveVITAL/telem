@@ -1,4 +1,9 @@
-from fastapi import APIRouter, Body, HTTPException, Path
+import math
+import re
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Body, HTTPException, Path, Request
+from pydantic import ValidationError
 
 from .. import generator
 from ..models import (
@@ -126,3 +131,75 @@ def heartbeat(
             404, f"unknown buoy: {buoy_id} - register it first with POST /api/buoys"
         )
     return _buoy_to_status(state)
+
+
+# MQTT topic plan (see pi/TOPICS.md): the source id is read from the topic, so adding a buoy
+# needs no Telegraf change.
+_TOPIC = re.compile(r"^vital/(buoy|service)/([^/]+)/(?:readings|metrics)$")
+_SERVICE_FIELDS = ("latency_ms", "rps", "error_rate")
+
+
+def _epoch_to_iso(ts):
+    """Telegraf's JSON timestamp is an integer in whatever unit json_timestamp_units says."""
+    try:
+        ts = float(ts)
+    except (TypeError, ValueError):
+        raise ValueError("timestamp must be a number")
+    for limit, divisor in ((1e17, 1e9), (1e14, 1e6), (1e11, 1e3)):  # ns, us, ms; below is seconds
+        if abs(ts) >= limit:
+            ts /= divisor
+            break
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+
+def _ingest_telegraf_metric(metric):
+    match = _TOPIC.match(str((metric.get("tags") or {}).get("topic", "")))
+    if not match:
+        raise ValueError("topic is not vital/buoy/<id>/readings or vital/service/<name>/metrics")
+    kind, source = match.groups()
+    fields = {
+        k: v
+        for k, v in (metric.get("fields") or {}).items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    }
+    when = None if metric.get("timestamp") is None else _epoch_to_iso(metric["timestamp"])
+    if kind == "service":
+        fields = {k: v for k, v in fields.items() if k in _SERVICE_FIELDS}
+    if not fields:
+        raise ValueError("no numeric fields")
+    if kind == "buoy":
+        body = BuoyIngestReading(time=when, **fields)  # the same validation as the buoy route
+        generator.ingest_buoy(source, _buoy_reading_dict(body), body.time)
+    else:
+        body = ServiceIngestReading(time=when, **fields)
+        generator.ingest_service(source, body.latency_ms, body.rps, body.error_rate, body.time)
+
+
+@router.post("/telegraf", summary="Ingest metrics forwarded by Telegraf from MQTT")
+async def ingest_telegraf(request: Request):
+    """Accepts Telegraf's JSON output (`{"metrics": [...]}`, a list, or one metric). Each metric
+    is judged on its own: a bad one is reported under `rejected` and never blocks the rest, so
+    Telegraf does not retry a batch forever. Only a storage failure (503) makes it retry."""
+    payload = await request.json()
+    metrics = payload.get("metrics") if isinstance(payload, dict) and "metrics" in payload else payload
+    if isinstance(metrics, dict):
+        metrics = [metrics]
+    if not isinstance(metrics, list):
+        raise ValueError("expected a Telegraf JSON metric, a list of them, or {\"metrics\": [...]}")
+    rejected = []
+    for i, metric in enumerate(metrics):
+        try:
+            if not isinstance(metric, dict):
+                raise ValueError("metric must be an object")
+            _ingest_telegraf_metric(metric)
+        except (ValueError, KeyError) as exc:  # pydantic's ValidationError is a ValueError
+            if isinstance(exc, KeyError):
+                reason = f"unknown source - register it first ({exc.args[0]})"
+            elif isinstance(exc, ValidationError):
+                e = exc.errors()[0]
+                reason = f"{'.'.join(map(str, e['loc'])) or 'reading'}: {e['msg']}"
+            else:
+                reason = str(exc)
+            rejected.append({"index": i, "reason": reason})
+            print(f"[ingest] telegraf metric {i} rejected: {reason}")
+    return {"accepted": len(metrics) - len(rejected), "rejected": rejected}

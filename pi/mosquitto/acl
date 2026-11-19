@@ -1,0 +1,17 @@
+# /etc/mosquitto/acl  (see pi/TOPICS.md)
+# The gateway only publishes readings and service metrics.
+user bridge
+topic write vital/buoy/+/readings
+topic write vital/service/+/metrics
+
+# Telegraf only listens.
+user telegraf
+topic read vital/#
+
+# LoRaWAN, only if the network server (ChirpStack) uses this broker. A user that is not listed gets
+# no access at all, so ChirpStack needs its own users too: set them in its config.
+# user lorawan
+# topic read application/+/device/+/event/up
+# user chirpstack
+# topic readwrite application/#
+# topic readwrite us915_1/gateway/#   # the gateway bridge's topic prefix follows its region setting

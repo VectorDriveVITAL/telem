@@ -1,0 +1,17 @@
+# /etc/systemd/system/lorawan-adapter.service  (adjust the paths to where telem is installed)
+[Unit]
+Description=LoRaWAN MQTT to telem adapter
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/default/lorawan-adapter
+WorkingDirectory=/var/lib/lorawan-adapter
+ExecStart=/opt/telem/.venv/bin/python /opt/telem/pi/lorawan_adapter.py --devices /etc/telem/devices.json --spool /var/lib/lorawan-adapter/spool.ndjson
+Restart=always
+RestartSec=5
+StateDirectory=lorawan-adapter
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

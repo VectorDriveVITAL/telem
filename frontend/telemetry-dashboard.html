@@ -460,6 +460,7 @@
         <button class="tab-btn" data-view="incidents">Incidents</button>
         <button class="tab-btn" data-view="analysis">Analysis</button>
         <button class="tab-btn" data-view="vital">VITAL</button>
+        <button class="tab-btn" data-view="lorawan">LoRaWAN</button>
         <button class="tab-btn" data-view="receiver">Receiver</button>
       </div>
     </div>
@@ -511,6 +512,18 @@
       <section class="panel vital-remote-panel">
         <div class="panel-head"><div><div class="panel-title">Data in VITAL</div><div class="panel-sub">Campaign, stations and sensors as vitalapi reports them</div></div><button class="action" data-action="vital-refresh">Refresh</button></div>
         <pre id="vital-remote" class="mono vital-remote">Not loaded.</pre>
+      </section>
+    </main></div>
+
+    <div class="view" id="view-lorawan"><main>
+      <div class="overview-heading"><div><h1>LoRaWAN</h1><p class="muted">Radio link health for each core, as the gateway hears it. The readings themselves come in through the adapter and show on the other tabs. Counts start again when telem restarts.</p></div></div>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Devices</div><div class="panel-sub" id="lw-sub">Loading…</div></div></div>
+        <div class="rx-tablewrap"><table class="rx-table" id="lw-devices"></table></div>
+      </section>
+      <section class="panel rx-data">
+        <div class="panel-head"><div><div class="panel-title">Recent uplinks</div><div class="panel-sub">Newest first. A lost-packet note means the frame counter skipped numbers.</div></div></div>
+        <div class="rx-tablewrap"><table class="rx-table" id="lw-events"></table></div>
       </section>
     </main></div>
 

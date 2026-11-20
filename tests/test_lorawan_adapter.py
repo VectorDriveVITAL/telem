@@ -217,8 +217,9 @@ def test_once_mode_sends_one_uplink_from_stdin_and_reports_success_or_failure(te
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(sys, "stdin", io.StringIO(uplink))
     assert a.main() == 0 and "buoy-02" in capsys.readouterr().out
-    path, body = telem.received[0]
+    path, body = next(r for r in telem.received if r[0].startswith("/api/ingest"))
     assert path == "/api/ingest/buoys/buoy-02" and body["temp"] == 21.0 and body["signal_dbm"] == -80
+    assert any(p == "/api/lorawan/uplink" and b["buoy"] == "buoy-02" for p, b in telem.received)
     monkeypatch.setattr(sys, "stdin", io.StringIO(uplink.replace("70b3d57ed0012345", "ffffffffffffffff")))
     assert a.main() == 1  # an unmapped device is a failure a script can notice
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))

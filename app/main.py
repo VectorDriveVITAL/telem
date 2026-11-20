@@ -15,6 +15,7 @@ from .generator import background_loop, seconds_since_start, seed_history
 from .influx_client import QueryTooLarge, close_client
 from . import receiver, vital
 from .routers import alerts, buoys, incidents, ingest, operations, services
+from .routers import lorawan as lorawan_routes
 from .routers import receiver as receiver_routes
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -73,6 +74,7 @@ app.include_router(incidents.router)
 app.include_router(ingest.router)
 app.include_router(operations.router)
 app.include_router(receiver_routes.router)
+app.include_router(lorawan_routes.router)
 
 
 @app.exception_handler(KeyError)

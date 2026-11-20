@@ -119,12 +119,15 @@ def build_body(up, fields):
     return body
 
 
-def handle(payload, devices, send, seen=None):
-    """One MQTT message in; `send(buoy, body)` is called for a reading. Returns a log line."""
+def handle(payload, devices, send, seen=None, link=None):
+    """One MQTT message in; `send(buoy, body)` is called for a reading, `link(record)` for its
+    link quality (also for devices not in the file, so the dashboard shows them). Returns a log line."""
     up = parse_uplink(json.loads(payload))
     if up["f_port"] != READINGS_PORT:
         return f"ignored  {up['dev_eui']}  port {up['f_port']}"
     buoy = devices.get(up["dev_eui"])
+    if link:
+        link({"dev_eui": up["dev_eui"], "buoy": buoy, "f_cnt": up["f_cnt"], "rssi": up["rssi"], "snr": up["snr"]})
     if buoy is None:
         if seen is None or up["dev_eui"] not in seen:
             (seen if seen is not None else set()).add(up["dev_eui"])
@@ -151,6 +154,16 @@ def post(telem, buoy, body):
         return "drop"  # a 4xx will not get better by trying again
     except (urllib.error.URLError, TimeoutError, OSError):
         return "retry"
+
+
+def post_link(telem, record):
+    """Best effort: link statistics are nice to have, so a failure is never retried or spooled."""
+    req = urllib.request.Request(f"{telem.rstrip('/')}/api/lorawan/uplink", data=json.dumps(record).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=3).close()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        pass
 
 
 class Sender:
@@ -213,7 +226,7 @@ def main():
     if args.once:
         devices = {k.lower(): v for k, v in json.loads(Path(args.devices).read_text()).items()}
         try:
-            line = handle(sys.stdin.read(), devices, Sender(args.telem, args.spool))
+            line = handle(sys.stdin.read(), devices, Sender(args.telem, args.spool), link=lambda r: post_link(args.telem, r))
         except (ValueError, KeyError) as exc:
             print(f"skipped: {exc}")
             return 1
@@ -231,7 +244,7 @@ def main():
 
     def on_message(client, userdata, msg):
         try:
-            line = handle(msg.payload, devices, send, seen)
+            line = handle(msg.payload, devices, send, seen, lambda r: post_link(args.telem, r))
         except (ValueError, KeyError) as exc:  # one malformed uplink must not stop the rest
             line = f"skipped a message on {msg.topic}: {exc}"
         if line:

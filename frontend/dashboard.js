@@ -2,7 +2,7 @@
 "use strict";
 import { animate as aAnimate } from "./anime.esm.js";
 import { animate as mAnimate } from "./motion.esm.js";
-import { CATEGORIES, createDescriber } from "./receiver-log.js";
+import { CATEGORIES, createDescriber, rssiQuality, snrQuality } from "./receiver-log.js";
 import { analyse, change, derived, smooth } from "./receiver-stats.js";
 // This build of motion.dev takes tween "duration" in seconds; every other
 // animation call in this file (anime.js, native Element.animate) is in
@@ -885,7 +885,7 @@ function setTheme(theme) {
 }
 function switchTab(tab, updateHash = true, load = true) {
   if (
-    !["overview", "services", "sensors", "incidents", "analysis", "vital", "receiver"].includes(tab)
+    !["overview", "services", "sensors", "incidents", "analysis", "vital", "lorawan", "receiver"].includes(tab)
   )
     return;
   const changed = S.tab !== tab;
@@ -926,6 +926,11 @@ function switchTab(tab, updateHash = true, load = true) {
   }
   clearInterval(receiverTimer);
   clearInterval(receiverGraphTimer);
+  clearInterval(lorawanTimer);
+  if (tab === "lorawan") {
+    loadLorawan().catch((e) => toast(e.message));
+    lorawanTimer = setInterval(() => loadLorawan().catch(() => {}), 5000);
+  }
   if (tab === "receiver") {
     loadReceiver().catch((e) => toast(e.message));
     receiverTimer = setInterval(() => loadReceiver().catch(() => {}), 3000);
@@ -953,7 +958,7 @@ function applyHash() {
   }
   if (
     tab &&
-    ["overview", "services", "sensors", "incidents", "analysis", "vital", "receiver"].includes(tab)
+    ["overview", "services", "sensors", "incidents", "analysis", "vital", "lorawan", "receiver"].includes(tab)
   ) {
     if (
       id &&
@@ -2280,6 +2285,67 @@ async function loadVitalRemote() {
   }
 }
 let receiverTimer, receiverGraphTimer, receiverLast;
+let lorawanTimer;
+
+function lwTable(id, head, rows) {
+  const row = (cells, tag) => {
+    const tr = document.createElement("tr");
+    for (const c of cells) {
+      const el = document.createElement(tag),
+        cell = c !== null && typeof c === "object" ? c : { t: c };
+      el.textContent = cell.t ?? "–";
+      if (cell.c) el.className = cell.c;
+      if (cell.title) el.title = cell.title;
+      tr.append(el);
+    }
+    return tr;
+  };
+  $(id).replaceChildren(row(head, "th"), ...rows.map((r) => row(r, "td")));
+}
+const lwDur = (s) => (s < 90 ? Math.round(s) + " s" : s < 5400 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h");
+const lwQ = (q, unit, v, rate) =>
+  v === null || v === undefined ? "–" : { t: `${v} ${unit}`, c: "lw-" + rate(v), title: q };
+
+async function loadLorawan() {
+  const { devices, events } = await api("/api/lorawan");
+  const silent = devices.filter((d) => d.silent).length;
+  setText(
+    "lw-sub",
+    devices.length
+      ? `${devices.length} device${devices.length > 1 ? "s" : ""}` + (silent ? ` · ${silent} silent` : " · all reporting")
+      : "No uplinks yet. A core that has joined shows up here at its first uplink, even before it is mapped to a buoy.",
+  );
+  lwTable(
+    "lw-devices",
+    ["Buoy", "DevEUI", "Last uplink", "Every", "FCnt", "RSSI", "SNR", "Delivered", "Lost", "Restarts"],
+    devices.map((d) => [
+      d.buoy ? { t: d.buoy } : { t: "not mapped", c: "lw-ok", title: "Add this DevEUI to the adapter's devices file and restart it" },
+      d.dev_eui,
+      d.silent
+        ? { t: lwDur(d.age_s) + " ago · silent", c: "lw-bad", title: "More than three typical gaps without an uplink" }
+        : lwDur(d.age_s) + " ago",
+      d.interval_s === null ? "–" : lwDur(d.interval_s),
+      d.f_cnt,
+      lwQ("Signal strength", "dBm", d.rssi, rssiQuality),
+      lwQ("Signal quality", "dB", d.snr, snrQuality),
+      { t: d.delivery + " %", c: d.delivery >= 95 ? "lw-good" : d.delivery >= 80 ? "lw-ok" : "lw-bad" },
+      d.lost,
+      d.restarts,
+    ]),
+  );
+  lwTable(
+    "lw-events",
+    ["Time", "Buoy", "FCnt", "RSSI", "SNR", "Note"],
+    events.map((e) => [
+      new Date(e.time).toLocaleTimeString(),
+      e.buoy ?? e.dev_eui,
+      e.f_cnt,
+      lwQ("Signal strength", "dBm", e.rssi, rssiQuality),
+      lwQ("Signal quality", "dB", e.snr, snrQuality),
+      e.note ? { t: e.note, c: e.note === "restarted" ? "lw-ok" : "lw-bad" } : "",
+    ]),
+  );
+}
 const RX = { buoy: "buoy-01", service: "lora-receiver" }; // replaced by the server's settings
 const RX_LABELS = {
   total_dissolved_solids: "TDS",

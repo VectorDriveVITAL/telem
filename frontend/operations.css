@@ -75,12 +75,14 @@ h2 {
 #view-overview.active,
 #view-analysis.active,
 #view-vital.active,
+#view-lorawan.active,
 #view-receiver.active {
   display: block;
 }
 #view-overview main,
 #view-analysis main,
 #view-vital main,
+#view-lorawan main,
 #view-receiver main {
   max-width: 1440px;
   margin: auto;
@@ -748,7 +750,8 @@ th[data-sort] {
   }
   #view-overview main,
   #view-analysis main,
-  #view-vital main {
+  #view-vital main,
+  #view-lorawan main {
     padding: 16px;
   }
   .overview-heading {
@@ -1340,3 +1343,7 @@ a.action {
   white-space: pre-wrap;
   color: var(--text-mid);
 }
+
+.lw-good { color: var(--green) !important; }
+.lw-ok { color: var(--amber) !important; }
+.lw-bad { color: var(--red) !important; }

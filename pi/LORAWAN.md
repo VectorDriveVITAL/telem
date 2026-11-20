@@ -50,8 +50,13 @@ meaning changes.
 | 10 | `battery` | uint8 | 1 | % (0-100) |
 | 11 | `solar_watts` | uint16 | /100 | W |
 | 12 | `age_s` | uint16 | 1 | s since measured (0 or absent = just now) |
+| 13 | `lat` | int32 | /1e7 | degrees (GNSS; clear bits 13-15 when there is no fix) |
+| 14 | `lng` | int32 | /1e7 | degrees |
+| 15 | `satellites` | uint8 | 1 | satellites in the fix |
 
-Largest payload (all 13 fields) is 28 bytes. US915 allows 53 bytes at DR1 and above, but only **11 at DR0**,
+The 16-bit mask is now full, so the next new field needs payload version 2.
+
+Largest payload (all 16 fields) is 37 bytes. US915 allows 53 bytes at DR1 and above, but only **11 at DR0**,
 so a pack that falls back to DR0 cannot send a full reading. Keep ADR on and the packs within DR1 range.
 
 Test vectors (also in `tests/test_lorawan_adapter.py`; the firmware must produce exactly these bytes):

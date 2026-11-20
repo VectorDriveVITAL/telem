@@ -43,6 +43,9 @@ FIELDS = [  # (telem sensor name, struct format, divisor)
     ("battery", "<B", 1),                   # bit 10  percent, 0-100
     ("solar_watts", "<H", 100),             # bit 11  W
     ("age_s", "<H", 1),                     # bit 12  seconds since measured (buffered readings)
+    ("lat", "<i", 10_000_000),              # bit 13  degrees, int32 x 1e7 (GNSS)
+    ("lng", "<i", 10_000_000),              # bit 14  degrees, int32 x 1e7 (GNSS)
+    ("satellites", "<B", 1),                # bit 15  satellites in the fix. The 16-bit mask is now full: a new field means payload version 2
 ]
 VERSION = 1
 READINGS_PORT = 1
@@ -54,8 +57,6 @@ def decode(raw):
     if len(raw) < 3 or raw[0] != VERSION:
         raise ValueError(f"unsupported payload (version {raw[0] if raw else '-'}, {len(raw)} bytes)")
     mask = int.from_bytes(raw[1:3], "little")
-    if mask >> len(FIELDS):
-        raise ValueError("payload has fields this adapter does not know; update the adapter")
     out, pos = {}, 3
     for bit, (name, fmt, divisor) in enumerate(FIELDS):
         if mask >> bit & 1:

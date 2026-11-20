@@ -31,6 +31,11 @@ def test_decode_matches_the_published_vectors():
     assert a.decode(bytes.fromhex(V_NEGATIVE)) == {"temp": -5.25}
 
 
+def test_gnss_position_vector():
+    raw = bytes.fromhex("0100e0ab14bd1114b927c709")  # shared with the core firmware
+    assert a.decode(raw) == pytest.approx({"lat": 29.7604267, "lng": -95.3698028, "satellites": 9})
+
+
 def test_missing_fields_stay_missing_and_zero_stays_a_reading():
     assert "ph" not in a.decode(bytes.fromhex(V_SMALL))
     assert a.decode(a.encode(turbidity=0.0))["turbidity"] == 0.0  # off is absent, zero is a value
@@ -39,14 +44,14 @@ def test_missing_fields_stay_missing_and_zero_stays_a_reading():
 def test_every_field_round_trips_and_the_largest_payload_fits_everywhere_above_dr0():
     values = {name: 1.0 for name, _, _ in a.FIELDS}
     assert a.decode(a.encode(**values)) == values
-    assert len(a.encode(**values)) == 28  # US915 allows 53 bytes at DR1 and above
+    assert len(a.encode(**values)) == 37  # US915 allows 53 bytes at DR1 and above
 
 
 @pytest.mark.parametrize(
     "raw",
     [b"", b"\x01\x01", bytes.fromhex("0205 04 ca08 d412 57".replace(" ", "")),  # wrong version
      bytes.fromhex("0105 04 ca08"), bytes.fromhex(V_SMALL) + b"\x00",  # truncated, trailing byte
-     bytes.fromhex("01 00 20".replace(" ", "")) + b"\x00"],  # a field bit this adapter does not know
+     ],
 )
 def test_malformed_payloads_are_refused_not_guessed(raw):
     with pytest.raises(ValueError):

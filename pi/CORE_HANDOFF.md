@@ -54,10 +54,13 @@ bytes 3..   the values of the set bits, in bit order, little-endian
 | 10 | `battery` | uint8 | 1 (percent) |
 | 11 | `solar_watts` | uint16 | 100 |
 | 12 | `age_s` | uint16 | 1 (seconds since the reading was taken) |
+| 13 | `lat` | int32 | 10000000 (degrees x 1e7, GNSS) |
+| 14 | `lng` | int32 | 10000000 (degrees x 1e7, GNSS) |
+| 15 | `satellites` | uint8 | 1 |
 
 - A sensor that is not fitted, not ready or failed: **clear its bit**. Never send 0 or a sentinel value.
 - Send the raw (uncalibrated) value. telem applies calibration.
-- Maximum 28 bytes. US915 at DR0 only carries **11 bytes** of application data, DR1 and above carry 53.
+- Maximum 37 bytes (all 16 fields). US915 at DR0 only carries **11 bytes** of application data, DR1 and above carry 53.
   See question 8.
 - Signal strength (`signal_dbm`) comes from the gateway, so don't send it.
 
@@ -68,6 +71,7 @@ Test vectors (decode these in your own code to confirm you match):
 | `010504ca08d41257` | temp 22.5, humidity 48.2, battery 87 |
 | `010100f3fd` | temp -5.25 |
 | `01ff07c008de081e1ea208ac1c78276800d100ee02000057` | 11 sensors (see `LORAWAN.md`) |
+| `0100e0ab14bd1114b927c709` | lat 29.7604267, lng -95.3698028, 9 satellites |
 
 ## What we will give you
 

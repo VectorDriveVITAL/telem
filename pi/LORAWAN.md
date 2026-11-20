@@ -17,15 +17,16 @@ Star topology: every pack talks only to the one gateway; each pack is its own so
 | Band | US915, sub-band 2 (channels 8-15) | assumed from the 915 MHz P2P link; the gateway and every pack must use the same sub-band |
 | Activation | OTAA, one DevEUI and AppKey per pack | never share keys between packs |
 | Class / uplinks | Class A, unconfirmed, fPort 1 | the packs only report; nothing is sent back |
-| Interval | pick per need (60 s is fine on ChirpStack) | on The Things Stack's public service a fair-use airtime limit applies per device, so use 5 min or more |
+| Interval | pick per need (60 s is fine) | a self-hosted network server has no fair-use limit; only the regulatory dwell time applies |
 | Time | no clock on the pack | the network server stamps arrival; buffered readings carry `age_s` |
-| Network server | The Things Stack (cloud), if the site really has internet | the Pi 3B+ is too tight for ChirpStack next to InfluxDB and telem; ChirpStack stays the fallback |
+| Network server | **ChirpStack v4 on the Pi** (self-hosted) | decided: the project is self-hosted, so no cloud account, no internet dependency, no fair-use limit |
 
-**Network server.** Decided: The Things Stack in the cloud, on the strength of "we have internet" (not yet confirmed at the site). The adapter connects out to its MQTT broker, so the Pi carries no network-server load. If connectivity proves unreliable, switch to ChirpStack on the Pi: only the adapter's `--broker`, `--topic` and credentials change. The reasoning: ChirpStack on the Pi runs offline and keeps data local, but it needs PostgreSQL and
-Redis next to InfluxDB and telem, which is heavy for a 1 GB Pi 3B+ (not measured). A Pi 4 with 2-4 GB suits
-it. The Things Stack in the cloud costs the Pi almost nothing, but the site needs reliable internet and the
-adapter connects out to its broker over TLS. Changing later only changes the adapter's `--topic`, `--broker`
-and credentials; firmware and payload stay the same.
+**Network server.** ChirpStack on the Pi, with the Semtech packet forwarder feeding the ChirpStack Gateway Bridge
+on `127.0.0.1:1700`, the bridge and ChirpStack sharing the Pi's Mosquitto, and US915 sub-band 2 as region
+`us915_1` (channels 8-15 plus 65). It needs Redis and either PostgreSQL or the lighter SQLite build
+(`chirpstack-sqlite`). Memory use on a 1 GB Pi 3B+ is not documented: measure it. The Things Stack in the cloud
+remains possible by changing only the adapter's broker, topic and credentials, but its Sandbox limits each
+device to 30 s of uplink airtime a day, and its MQTT is QoS 0 with no retention.
 
 ## Payload v1 (fPort 1)
 
@@ -93,6 +94,10 @@ sudo systemctl enable --now lorawan-adapter
   ACL (commented example in `pi/mosquitto/acl`).
 - The Things Stack: `--broker <your cluster address> --port 8883 --tls --user <application id> --topic 'v3/+/devices/+/up'`,
   with an API key as `LORAWAN_MQTT_PASSWORD`.
+- With a local ChirpStack, set `qos=1` in its `[integration.mqtt]` section (default 0). The adapter's persistent
+  QoS 1 subscription then lets Mosquitto queue uplinks while the adapter is down. The Things Stack's MQTT is
+  QoS 0 only and keeps nothing; there the username is `<application id>@<tenant id>`, the password an API key,
+  and uplinks are on `v3/<application id>@<tenant id>/devices/<device id>/up`.
 - Failed posts retry, then spool to `spool.ndjson` and replay every 30 s. A reading telem rejects (unknown buoy,
   bad value) is logged and dropped.
 

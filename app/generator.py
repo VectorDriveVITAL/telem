@@ -685,6 +685,8 @@ def ingest_buoy(buoy_id, fields_in, time_str=None):
         else:
             if key not in b["sensors"]:
                 b["sensors"][key] = _sensor(key, DEFAULT_UNITS.get(key, ""))
+            elif not b["sensors"][key]["unit"]:
+                b["sensors"][key]["unit"] = DEFAULT_UNITS.get(key, "")
             meta = target = b["sensors"][key]
         if (
             meta["simulated"]

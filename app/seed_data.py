@@ -65,12 +65,14 @@ SERVICES = [
     },
 ]
 
-# Units for the four water-quality sensors every default buoy starts with.
-# Sensors added later via POST /api/buoys/{id}/sensors carry whatever unit
-# (if any) is given at registration time; ones auto-created because real
-# ingested data showed up for an unrecognized field name get no unit at all,
-# since there was nowhere for one to come from.
-DEFAULT_UNITS = {"temp": "°C", "salinity": "psu", "turbidity": "NTU", "ph": ""}
+# Units by sensor name, used when a sensor is registered without one and for sensors created by
+# ingested data. LoRaWAN cores cannot send units (no room in the payload), so this is where they come
+# from; an existing sensor with no unit gets its default filled in on its next reading.
+DEFAULT_UNITS = {
+    "temp": "°C", "salinity": "psu", "turbidity": "NTU", "ph": "",
+    "air_temp": "°C", "humidity": "%", "core_temp": "°C", "core_humidity": "%", "pressure": "hPa",
+    "total_dissolved_solids": "ppm", "conductivity": "µS/cm",
+}
 
 # lat/lng are real coordinates off the Virginia coast (Chesapeake Bay mouth)
 # purely for the map — swap these for wherever your actual deployment is.

@@ -70,7 +70,7 @@ def overview():
                     "severity": b["status"],
                     "reason": b["status_text"],
                     "offline": b["offline"],
-                    "low_battery": b["battery"] <= 15,
+                    "low_battery": b["battery"] is not None and b["battery"] <= 15,
                     "stale_sensors": b["stale_sensor_count"],
                 }
             )
@@ -101,7 +101,7 @@ def overview():
             "buoys": len(buoys),
             "services": len(services),
             "offline_buoys": sum(b["offline"] for b in buoys),
-            "low_batteries": sum(b["battery"] <= 15 for b in buoys),
+            "low_batteries": sum(b["battery"] is not None and b["battery"] <= 15 for b in buoys),
             "stale_sensors": sum(b["stale_sensor_count"] for b in buoys),
             "active_incidents": sum(i["status"] == "ongoing" for i in incidents),
             "rising_services": len(rising),

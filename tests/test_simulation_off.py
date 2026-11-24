@@ -46,3 +46,12 @@ def test_tick_changes_nothing_and_simulate_endpoints_refuse(client):
     finally:
         client.delete("/api/buoys/simoff-2")
         client.delete("/api/services/simoff-svc")
+
+
+def test_dashboard_endpoints_survive_empty_values(client):
+    client.post("/api/buoys", json={"id": "simoff-3", "lat": 1, "lng": 2, "sensors": ["ph"]})
+    try:
+        for path in ("/api/overview", "/api/alerts", "/api/incidents", "/api/buoys", "/api/services", "/api/mutes"):
+            assert client.get(path).status_code == 200, path
+    finally:
+        client.delete("/api/buoys/simoff-3")

@@ -7,7 +7,7 @@ After=network-online.target telem.service
 ExecStart=/usr/bin/python3 /opt/telem/pi/service_health.py
 Restart=always
 RestartSec=5
-DynamicUser=yes
+User=vitalpi
 
 [Install]
 WantedBy=multi-user.target

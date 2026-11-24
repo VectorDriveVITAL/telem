@@ -30,6 +30,9 @@ class Settings:
 
     cors_origins: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
     state_db: str = os.getenv("STATE_DB", ".telem/state.sqlite3")
+    # false: nothing is made up. The tick writes no fake readings, and a sensor, battery or position
+    # that never reported shows no value. The /simulate endpoints answer 409.
+    simulate: bool = os.getenv("SIMULATE", "true").lower() == "true"
     seed_demo: bool = os.getenv("SEED_DEMO", "true").lower() == "true"
 
     # Forward real buoy readings to the VITAL sensor API; off unless all three are set.

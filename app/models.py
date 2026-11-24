@@ -61,7 +61,7 @@ class ServiceStatus(Model):
 
 
 class SensorReading(Model):
-    value: float
+    value: Optional[float]  # None: never reported while SIMULATE=false
     unit: str
     simulated: bool
     last_reading_at: Optional[str] = None
@@ -76,11 +76,11 @@ class BuoyStatus(Model):
     status_text: str
     lat: float
     lng: float
-    battery: float
+    battery: Optional[float]  # these four are None when never reported and SIMULATE=false
     battery_simulated: bool
-    solar_watts: float
-    satellites: int
-    signal_dbm: float
+    solar_watts: Optional[float]
+    satellites: Optional[int]
+    signal_dbm: Optional[float]
     position_simulated: bool
     gnss_fix: str
     last_contact_seconds: float

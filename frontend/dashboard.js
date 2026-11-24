@@ -28,6 +28,7 @@ const colors = [
 ];
 const pretty = (name) =>
   name.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const withUnit = (n, unit) => (n == null ? "—" : number(n) + unit);
 const number = (n) =>
   n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 });
 const timestamp = (t) => (t ? new Date(t).toLocaleString() : "No reading yet");
@@ -1022,7 +1023,7 @@ function filtered(scope) {
     if (filter === "all") return true;
     if (filter === "rising") return S.overview?.rising_services.includes(name);
     if (filter === "offline") return item.offline;
-    if (filter === "battery") return item.battery <= 15;
+    if (filter === "battery") return item.battery != null && item.battery <= 15;
     if (filter === "stale")
       return scope === "services" ? item.stale : item.stale_sensor_count > 0;
     return item.status === filter;
@@ -1048,7 +1049,7 @@ function renderSources() {
     buoys
       .map(
         (b) =>
-          `<div class="svc-item ${b.id === S.selected.sensors ? "active" : ""}" tabindex="0" role="button" data-select="buoy" data-source="${esc(b.id)}"><span class="dot ${dot(b.status)}"></span><span class="svc-name">${esc(b.id)}</span><span class="svc-rps">${S.compare.sensors.has(b.id) ? "✓" : Math.round(b.battery) + "%"}</span></div>`,
+          `<div class="svc-item ${b.id === S.selected.sensors ? "active" : ""}" tabindex="0" role="button" data-select="buoy" data-source="${esc(b.id)}"><span class="dot ${dot(b.status)}"></span><span class="svc-name">${esc(b.id)}</span><span class="svc-rps">${S.compare.sensors.has(b.id) ? "✓" : b.battery == null ? "—" : Math.round(b.battery) + "%"}</span></div>`,
       )
       .join("") || '<div class="empty">No matching buoys.</div>';
   setText("services-count", `SERVICES · ${S.services.length}`);
@@ -1062,7 +1063,7 @@ function renderSources() {
   $("buoys-tbody").innerHTML = buoys
     .map(
       (b) =>
-        `<tr><td>${esc(b.id)}</td><td><span class="dot ${dot(b.status)}"></span> ${esc(b.status_text)}</td><td>${number(b.battery)}%</td><td>${ago(b.last_contact_at)} ${b.contact_simulated ? '<span class="badge">SIM</span>' : ""}</td><td>${esc(b.gnss_fix)}</td><td>${number(b.signal_dbm)}dBm</td><td>${sourceButton("buoy", b.id, "View")}</td></tr>`,
+        `<tr><td>${esc(b.id)}</td><td><span class="dot ${dot(b.status)}"></span> ${esc(b.status_text)}</td><td>${withUnit(b.battery, "%")}</td><td>${ago(b.last_contact_at)} ${b.contact_simulated ? '<span class="badge">SIM</span>' : ""}</td><td>${esc(b.gnss_fix)}</td><td>${withUnit(b.signal_dbm, "dBm")}</td><td>${sourceButton("buoy", b.id, "View")}</td></tr>`,
     )
     .join("");
   setText(
@@ -1136,10 +1137,10 @@ function renderReadouts() {
     $("chart-panel-sensors").querySelector(".panel-title").innerHTML =
       `${esc(pretty(S.metric))} · <button class="source-link" data-action="inspect" data-kind="buoy" data-source="${esc(b.id)}">${esc(b.id)} ↗</button>`;
     $("current-readings-grid").innerHTML = readingsHTML(b.sensors);
-    setText("batt-num", number(b.battery) + "%");
+    setText("batt-num", withUnit(b.battery, "%"));
     setText(
       "batt-status",
-      `Solar ${number(b.solar_watts)} W · ${b.field_metadata.solar_watts.simulated ? "simulated" : "reported"}`,
+      `Solar ${withUnit(b.solar_watts, " W")} · ${b.solar_watts == null ? "not reported" : b.field_metadata.solar_watts.simulated ? "simulated" : "reported"}`,
     );
     const panel = $("view-sensors").querySelector(".gnss-coords");
     panel.textContent = coords(b);
@@ -1327,8 +1328,8 @@ function renderDrawer() {
       "d",
       $("spark-path-batt").getAttribute("d") || "",
     );
-  setText("dw-batt", number(b.battery) + "%");
-  setText("dw-solar", number(b.solar_watts) + " W");
+  setText("dw-batt", withUnit(b.battery, "%"));
+  setText("dw-solar", withUnit(b.solar_watts, " W"));
   setText("dw-coords", coords(b));
   setText("dw-fix", b.gnss_fix);
   setText("dw-drift", drift(b).text);
@@ -1337,7 +1338,7 @@ function renderDrawer() {
     "dw-contact",
     ago(b.last_contact_at) + (b.contact_simulated ? " · simulated" : ""),
   );
-  setText("dw-signal", number(b.signal_dbm) + " dBm");
+  setText("dw-signal", withUnit(b.signal_dbm, " dBm"));
   $("dw-events").innerHTML =
     S.alerts
       .filter((a) => a.source_type === "buoy" && a.source === b.id)
@@ -3363,7 +3364,7 @@ document.addEventListener("mouseover", (e) => {
     s = kind === "service" ? getService(source) : getBuoy(source);
   if (!s) return;
   const box = $("hover-preview");
-  box.innerHTML = `<div class="hover-preview-name">${esc(source)}</div><div class="hover-preview-row">${esc(s.status)}</div><div class="hover-preview-row">${kind === "service" ? number(s.latency_ms) + " ms · " + number(s.rps) + " req/s" : number(s.battery) + "% battery · " + ago(s.last_contact_at)}</div><div class="hover-preview-hint">Click to inspect${S.comparing[kind === "service" ? "services" : "sensors"] ? " or compare" : ""}</div>`;
+  box.innerHTML = `<div class="hover-preview-name">${esc(source)}</div><div class="hover-preview-row">${esc(s.status)}</div><div class="hover-preview-row">${kind === "service" ? number(s.latency_ms) + " ms · " + number(s.rps) + " req/s" : withUnit(s.battery, "% battery") + " · " + ago(s.last_contact_at)}</div><div class="hover-preview-hint">Click to inspect${S.comparing[kind === "service" ? "services" : "sensors"] ? " or compare" : ""}</div>`;
   const rect = item.getBoundingClientRect();
   box.style.left = Math.min(rect.right + 8, window.innerWidth - 230) + "px";
   box.style.top = Math.min(rect.top, window.innerHeight - 120) + "px";

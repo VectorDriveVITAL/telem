@@ -239,10 +239,12 @@ def _buoy_health(state):
     if time.time() - state["last_contact"] > state["offline_after_seconds"]:
         reasons.append("offline")
         status = "critical"
-    if state["battery"] <= 15:
+    if not unreported(state["battery_simulated"]) and state["battery"] <= 15:
         reasons.append("low battery")
         status = "critical"
     for name, sensor in state["sensors"].items():
+        if unreported(sensor["simulated"]):
+            continue
         severity, stale = _sensor_health(sensor)
         if severity != "healthy":
             reasons.append(
@@ -530,8 +532,16 @@ def seed_history():
     _evaluate()
 
 
+def unreported(simulated):
+    """True for a value nobody has reported while simulation is off: show it empty, never judge it."""
+    return not settings.simulate and simulated
+
+
 @mutation
 def _tick_once():
+    if not settings.simulate:
+        _evaluate()  # offline detection still runs
+        return
     now, points, forwards = utcnow(), [], []
     for name, s in _state["services"].items():
         if not s["simulated"]:

@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query
 
 from .. import generator
+from ..config import settings
 from ..influx_client import query_history, query_timeseries
 from ..models import ServiceCreate, ServiceStatus
 
@@ -60,6 +61,8 @@ def delete_service(name: str = Path(..., examples=["calibration-worker"])):
 )
 def resume_simulation(name: str = Path(..., examples=["calibration-worker"])):
     """Flips a service back to simulated, picking up its random walk from the current value."""
+    if not settings.simulate:
+        raise HTTPException(409, "simulation is turned off (SIMULATE=false)")
     try:
         state = generator.resume_service_simulation(name)
     except KeyError:

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from .. import calibration, generator
+from ..config import settings
 from ..security import control
 from ..influx_client import query_history, query_timeseries
 from ..models import (
@@ -19,10 +20,15 @@ from ..models import (
 router = APIRouter(prefix="/api/buoys", tags=["buoys"])
 
 
+def _field(state, key):
+    """A battery/solar/position value, or None when it never reported and SIMULATE=false."""
+    meta = state["battery_simulated"] if key == "battery" else state["field_metadata"][key]["simulated"]
+    return None if generator.unreported(meta) else state[key]
+
+
 def _to_status(state: dict) -> BuoyStatus:
-    gnss_fix = (
-        f"{state['satellites']} satellites" if state["satellites"] >= 4 else "No 3D fix"
-    )
+    battery, solar, sats, signal = (_field(state, k) for k in ("battery", "solar_watts", "satellites", "signal_dbm"))
+    gnss_fix = "No data" if sats is None else f"{sats} satellites" if sats >= 4 else "No 3D fix"
     health, reasons = generator._buoy_health(state)
     return BuoyStatus(
         id=state["id"],
@@ -30,11 +36,11 @@ def _to_status(state: dict) -> BuoyStatus:
         status_text="; ".join(reasons) or "healthy",
         lat=state["lat"],
         lng=state["lng"],
-        battery=round(state["battery"], 1),
+        battery=None if battery is None else round(battery, 1),
         battery_simulated=state["battery_simulated"],
-        solar_watts=state["solar_watts"],
-        satellites=state["satellites"],
-        signal_dbm=state["signal_dbm"],
+        solar_watts=solar,
+        satellites=sats,
+        signal_dbm=signal,
         position_simulated=state["position_simulated"],
         gnss_fix=gnss_fix,
         last_contact_seconds=round(time.time() - state["last_contact"], 1),
@@ -43,19 +49,21 @@ def _to_status(state: dict) -> BuoyStatus:
         offline=time.time() - state["last_contact"] > state["offline_after_seconds"],
         offline_after_seconds=state["offline_after_seconds"],
         stale_sensor_count=sum(
-            generator._sensor_health(s)[1] for s in state["sensors"].values()
+            generator._sensor_health(s)[1]
+            for s in state["sensors"].values()
+            if not generator.unreported(s["simulated"])
         ),
         field_metadata=state["field_metadata"],
         mooring_lat=state["mooring_lat"],
         mooring_lng=state["mooring_lng"],
         sensors={
             name: SensorReading(
-                value=round(cfg["value"], 3),
+                value=None if generator.unreported(cfg["simulated"]) else round(cfg["value"], 3),
                 unit=cfg["unit"],
-                simulated=cfg["simulated"],
+                simulated=cfg["simulated"] and settings.simulate,
                 last_reading_at=cfg.get("last_reading_at"),
-                stale=generator._sensor_health(cfg)[1],
-                status=generator._sensor_health(cfg)[0],
+                stale=False if generator.unreported(cfg["simulated"]) else generator._sensor_health(cfg)[1],
+                status="healthy" if generator.unreported(cfg["simulated"]) else generator._sensor_health(cfg)[0],
                 rules=cfg["rules"],
             )
             for name, cfg in state["sensors"].items()
@@ -142,6 +150,8 @@ def resume_simulation(
 ):
     """With `sensor` given ("battery", "position", or a sensor name), flips just that field back to
     simulated. Omit it (or send `{}`) to reset the whole buoy - all sensors plus battery and position."""
+    if not settings.simulate:
+        raise HTTPException(409, "simulation is turned off (SIMULATE=false)")
     try:
         state = generator.resume_buoy_simulation(buoy_id, body.sensor)
     except KeyError as e:

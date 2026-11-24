@@ -2,12 +2,13 @@
 """Report this Pi's real services to telem's Service Health tab (stdlib only).
 
 Every INTERVAL seconds, for each systemd unit below: `systemctl is-active`, plus the TCP connect time
-where the unit has a port, and a requests-per-second rate for every unit except telegraf and lora-pkt-fwd. latency_ms is that connect time; units without a port report 0 while active.
+where the unit has a port, and a requests-per-second rate for every unit (the packet forwarder's comes from its log). latency_ms is that connect time; units without a port report 0 while active.
 A unit that is not active or not accepting connections reports DOWN_MS, which telem shows as critical.
 """
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -25,7 +26,7 @@ UNITS = {  # unit -> TCP port (None: no port to time)
     "lorawan-adapter": None,
 }
 # Units whose request count we can read: unit -> function returning a running total (or None).
-# telegraf and lora-pkt-fwd have none yet.
+# Every unit has a rate source below.
 def _get(url):
     return urllib.request.urlopen(url, timeout=3).read().decode()
 
@@ -41,6 +42,10 @@ def influx_total():
 
 def chirpstack_total():  # uplink frames the gateways delivered (enabled by [monitoring] in chirpstack.toml)
     return prom_total("http://127.0.0.1:9000/metrics", 'gateway_backend_mqtt_events_total{event="up"}')
+
+
+def telegraf_total():  # MQTT readings Telegraf has consumed (the [[inputs.internal]] block in telegraf.conf)
+    return prom_total("http://127.0.0.1:9273/metrics", 'internal_gather_metrics_gathered{input="mqtt_consumer"')
 
 
 def bridge_total():  # PushData also carries the forwarder's 30 s status reports, so this runs above the uplink rate
@@ -73,6 +78,21 @@ def mosquitto_total():
         c.loop_stop()
         c.disconnect()
     return seen[0] if seen else None
+
+
+STAT_PERIOD_S = 30  # shortcut: the forwarder's default stat interval; read it from global_conf.json if you change it
+
+
+def forwarder_rate(journal_text):
+    """Radio packets per second heard by the concentrator, from the newest stats block in the forwarder's log."""
+    counts = re.findall(r"RF packets received by concentrator: (\d+)", journal_text)
+    return int(counts[-1]) / STAT_PERIOD_S if counts else None
+
+
+def forwarder_now():
+    out = subprocess.run(["journalctl", "-u", "lora-pkt-fwd", "--since", "-90s", "-o", "cat", "--no-pager"],
+                         capture_output=True, text=True, timeout=5).stdout
+    return forwarder_rate(out)
 
 
 def rate(prev, total, now):
@@ -115,7 +135,7 @@ def main():
     ap.add_argument("--telem", default="http://127.0.0.1:8000")
     ap.add_argument("--interval", type=float, default=15)  # telem marks a service stale after 300 s
     args = ap.parse_args()
-    totals = {"influxdb": influx_total, "mosquitto": mosquitto_total,
+    totals = {"influxdb": influx_total, "mosquitto": mosquitto_total, "telegraf": telegraf_total,
               "chirpstack-sqlite": chirpstack_total, "chirpstack-gateway-bridge": bridge_total, "telem": lambda: telem_total(args.telem),
               "lorawan-adapter": lambda: adapter_total(args.telem)}
     last = {}
@@ -123,6 +143,13 @@ def main():
         for unit, port in UNITS.items():
             latency, err = check(unit, port)
             body = {"latency_ms": latency, "error_rate": err}
+            if unit == "lora-pkt-fwd":
+                try:
+                    per_s = forwarder_now()
+                except (OSError, subprocess.SubprocessError):
+                    per_s = None
+                if per_s is not None:
+                    body["rps"] = round(per_s, 4)
             if unit in totals:
                 try:
                     total = totals[unit]()

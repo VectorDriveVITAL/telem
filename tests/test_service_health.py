@@ -68,3 +68,16 @@ def test_prom_total_filters_by_label(monkeypatch):
     text = 'm{event="up"} 2\nm{event="stats"} 5\nm{event="up",x="1"} 1\n'
     monkeypatch.setattr(sh, "_get", lambda url: text)
     assert sh.prom_total("u", 'm{event="up"') == 3
+
+
+def test_forwarder_rate_uses_newest_stats_block():
+    log = "# RF packets received by concentrator: 6\nINFO: x\n# RF packets received by concentrator: 3\n"
+    assert sh.forwarder_rate(log) == 0.1
+    assert sh.forwarder_rate("INFO: [down] PULL_ACK received in 0 ms\n") is None
+
+
+def test_telegraf_total_matches_only_the_mqtt_input(monkeypatch):
+    text = ('internal_gather_metrics_gathered{input="internal",version="1"} 9\n'
+            'internal_gather_metrics_gathered{input="mqtt_consumer",version="1"} 4\n')
+    monkeypatch.setattr(sh, "_get", lambda url: text)
+    assert sh.telegraf_total() == 4

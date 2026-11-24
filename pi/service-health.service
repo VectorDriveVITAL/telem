@@ -1,0 +1,13 @@
+# /etc/systemd/system/service-health.service  (adjust the paths to where telem is installed)
+[Unit]
+Description=Report the Pi's services to telem
+After=network-online.target telem.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/telem/pi/service_health.py
+Restart=always
+RestartSec=5
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

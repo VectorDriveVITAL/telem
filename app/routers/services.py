@@ -15,7 +15,7 @@ def _to_status(state: dict) -> ServiceStatus:
         name=state["name"],
         status=generator._service_health(state)[0],
         latency_ms=round(state["latency"], 1),
-        rps=round(state["rps"]),
+        rps=None if not state["simulated"] and "rps" not in state["field_times"] else round(state["rps"]),
         error_rate=round(state["error_rate"], 3),
         simulated=state["simulated"],
         last_reading_at=state.get("last_reading_at"),

@@ -29,7 +29,7 @@ const colors = [
 const pretty = (name) =>
   name.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const number = (n) =>
-  Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: 3 });
 const timestamp = (t) => (t ? new Date(t).toLocaleString() : "No reading yet");
 const shortTime = (t) =>
   new Date(t).toLocaleTimeString([], {

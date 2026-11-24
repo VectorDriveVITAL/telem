@@ -50,7 +50,7 @@ class ServiceStatus(Model):
     name: str
     status: str
     latency_ms: float
-    rps: float
+    rps: Optional[float] = None  # None: a real service that never reported it
     error_rate: float
     simulated: bool
     last_reading_at: Optional[str] = None

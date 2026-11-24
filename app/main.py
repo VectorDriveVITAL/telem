@@ -107,6 +107,11 @@ def health():
     return {"status": "ok", "uptime_seconds": round(seconds_since_start(), 1)}
 
 
+@app.get("/api/config", summary="Browser settings", tags=["meta"])
+def browser_config():
+    return {"carto_key": settings.carto_key}
+
+
 # Serve the dashboard itself at "/", same-origin with the API so there's no
 # CORS to think about for local dev — run this one process and open one URL.
 if FRONTEND_DIR.exists():

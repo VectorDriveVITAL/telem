@@ -40,6 +40,9 @@ class Settings:
     vital_password: str = os.getenv("VITAL_PASSWORD", "")
     vital_campaign_id: str = os.getenv("VITAL_CAMPAIGN_ID", "")
 
+    # Browser-visible CARTO basemap key (restrict it to your domains in CARTO's dashboard).
+    carto_key: str = os.getenv("CARTO_API_KEY", "")
+
     # Which buoy and service the bridge's readings and link health belong to.
     receiver_buoy: str = os.getenv("RECEIVER_BUOY", "buoy-01")
     receiver_service: str = os.getenv("RECEIVER_SERVICE", "lora-receiver")

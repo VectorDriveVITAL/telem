@@ -1379,11 +1379,20 @@ function renderAnalysisControls() {
     )
     .join("");
 }
+let cartoKey = "";
 function tileURL() {
-  const light = document.documentElement.dataset.theme === "light";
-  return `https://{s}.basemaps.cartocdn.com/${light ? "light_all" : "dark_all"}/{z}/{x}/{y}{r}.png`;
+  const style = document.documentElement.dataset.theme === "light" ? "light_all" : "dark_all";
+  // shortcut: dark_all/light_all path under rastertiles/ is assumed from CARTO's Voyager URL, confirm once with a key
+  return `https://basemaps.cartocdn.com/rastertiles/${style}/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(cartoKey)}`;
 }
-function initMap() {
+let mapStarting = false;
+async function initMap() {
+  if (map || mapStarting) return;
+  mapStarting = true;
+  try {
+    cartoKey = (await api("/api/config")).carto_key || "";
+  } catch {}
+  mapStarting = false;
   if (map) return;
   if (!window.L) {
     $("leaflet-map").innerHTML =
@@ -1396,7 +1405,6 @@ function initMap() {
   );
   tiles = L.tileLayer(tileURL(), {
     attribution: "© OpenStreetMap © CARTO",
-    subdomains: "abcd",
     maxZoom: 18,
   }).addTo(map);
   updateMap();

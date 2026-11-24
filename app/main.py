@@ -101,10 +101,22 @@ async def storage_unavailable(request, exc):
     )
 
 
+_requests = 0
+
+
+@app.middleware("http")
+async def count_requests(request, call_next):
+    global _requests
+    # The Pi's service reporter posts here every few seconds; counting it would measure itself.
+    if not (request.method == "POST" and request.url.path.startswith(("/api/ingest/services", "/api/services"))):
+        _requests += 1
+    return await call_next(request)
+
+
 @app.get("/api/health", summary="Health check", tags=["meta"])
 def health():
-    """Basic liveness/uptime check - doesn't touch InfluxDB."""
-    return {"status": "ok", "uptime_seconds": round(seconds_since_start(), 1)}
+    """Basic liveness/uptime check - doesn't touch InfluxDB. requests_total feeds Service Health's rate."""
+    return {"status": "ok", "uptime_seconds": round(seconds_since_start(), 1), "requests_total": _requests}
 
 
 @app.get("/api/config", summary="Browser settings", tags=["meta"])

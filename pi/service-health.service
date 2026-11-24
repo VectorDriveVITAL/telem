@@ -4,7 +4,8 @@ Description=Report the Pi's services to telem
 After=network-online.target telem.service
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/telem/pi/service_health.py
+EnvironmentFile=-/etc/default/service-health
+ExecStart=/opt/telem/.venv/bin/python /opt/telem/pi/service_health.py
 Restart=always
 RestartSec=5
 User=vitalpi
